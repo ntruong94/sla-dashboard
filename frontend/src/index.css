@@ -1,0 +1,8 @@
+/* index.css — dashboard reset only. All design tokens and layout rules are in styles.css */
+
+/* Remove Vite template constraints. #root must be a transparent full-width wrapper. */
+#root {
+  width: 100%;
+  min-height: 100vh;
+  display: block;
+}

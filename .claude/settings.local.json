@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(iconv -f UTF-16LE -t UTF-8 sql/SEReport_schema.sql)",
+      "Read(//tmp/**)"
+    ]
+  }
+}

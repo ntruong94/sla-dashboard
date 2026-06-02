@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SLA Performance Dashboard — Mortgage Ezy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles-views.css">
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script src="data.js"></script>
+<script src="history.js"></script>
+<script type="text/babel" src="icons.jsx"></script>
+<script type="text/babel" src="trend.jsx"></script>
+<script type="text/babel" src="history-chart.jsx"></script>
+<script type="text/babel" src="components.jsx"></script>
+<script type="text/babel" src="views.jsx"></script>
+
+<script type="text/babel">
+const TWEAKS = /*EDITMODE-BEGIN*/{
+  "simulateBreach": false
+}/*EDITMODE-END*/;
+
+// --- Breach simulation: push every team worse ---
+function applyBreach(teams) {
+  return teams.map(t => {
+    let sla = Math.max(40, t.sla - (t.sla >= 90 ? 22 : t.sla >= 75 ? 18 : 12));
+    let overdue = t.overdue + Math.round(t.volume * 0.15) + 3;
+    let avgTat = +(t.avgTat + 1.8).toFixed(1);
+    return { ...t, sla, overdue, avgTat };
+  });
+}
+
+function applyBreachTrend(trend) {
+  const out = {};
+  for (const k in trend) {
+    out[k] = trend[k].map((v, i) => Math.max(55, v - 10 - i * 1.5)).map(v => Math.round(v));
+  }
+  return out;
+}
+
+function applyBreachAlerts(alerts) {
+  return [
+    { id: 'sim-1', severity: 'critical', title: 'SYSTEM-WIDE BREACH — all teams', desc: 'Mass SLA degradation detected across 6 teams. Escalate to Ops Manager.', time: 'just now' },
+    { id: 'sim-2', severity: 'critical', title: 'So Ezy sync latency', desc: 'Task updates delayed 6+ min — refresh cadence at risk.', time: '2m ago' },
+    { id: 'sim-3', severity: 'critical', title: 'Settlements — 15 overdue', desc: 'Same-day settlements stalled on conveyancer response.', time: '8m ago' },
+    { id: 'sim-4', severity: 'critical', title: 'Assessments queue surge', desc: 'Queue up 180% vs Mon baseline. Credit capacity critical.', time: '14m ago' },
+    { id: 'sim-5', severity: 'warning', title: 'Valuations SLA <75%', desc: 'Third breach in 24h. Check panel valuer rotation.', time: '22m ago' },
+  ];
+}
+
+function App() {
+  const [view, setView] = React.useState('dashboard');
+  const [activeTeamId, setActiveTeamId] = React.useState(null);
+  const [dismissedAlerts, setDismissedAlerts] = React.useState(new Set());
+  const [dimmedTeams, setDimmedTeams] = React.useState(new Set());
+  const [now, setNow] = React.useState(new Date());
+  const [lastRefresh, setLastRefresh] = React.useState(new Date());
+  const [tweaks, setTweaks] = React.useState(TWEAKS);
+  const [tweaksOpen, setTweaksOpen] = React.useState(false);
+  const [justRefreshed, setJustRefreshed] = React.useState(false);
+  const [settings, setSettings] = React.useState({
+    targets: {},
+    refreshMin: 5,
+    atRiskPct: 85,
+    modalTaskCount: 10,
+  });
+
+  // Clock tick every second
+  React.useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Simulated data refresh every 45s (non-disruptive)
+  React.useEffect(() => {
+    const t = setInterval(() => {
+      setLastRefresh(new Date());
+      setJustRefreshed(true);
+      setTimeout(() => setJustRefreshed(false), 800);
+    }, 45000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Tweaks protocol
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      const d = e.data;
+      if (!d || !d.type) return;
+      if (d.type === '__activate_edit_mode') setTweaksOpen(true);
+      if (d.type === '__deactivate_edit_mode') setTweaksOpen(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const setTweak = (key, value) => {
+    setTweaks(t => ({ ...t, [key]: value }));
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { [key]: value } }, '*');
+  };
+
+  // Apply breach simulation
+  const teams = tweaks.simulateBreach ? applyBreach(TEAMS_BASE) : TEAMS_BASE;
+  const trend = tweaks.simulateBreach ? applyBreachTrend(TREND_DATA) : TREND_DATA;
+  const alertsSource = tweaks.simulateBreach ? applyBreachAlerts(ALERTS) : ALERTS;
+  const alerts = alertsSource.filter(a => !dismissedAlerts.has(a.id));
+
+  // Global KPIs
+  const totalTasks = teams.reduce((s, t) => s + t.volume, 0);
+  const overallSla = Math.round(teams.reduce((s, t) => s + t.sla * t.volume, 0) / totalTasks);
+  const avgTatAll = (teams.reduce((s, t) => s + t.avgTat * t.volume, 0) / totalTasks).toFixed(1);
+  const totalOverdue = teams.reduce((s, t) => s + t.overdue, 0);
+
+  const activeTeam = teams.find(t => t.id === activeTeamId);
+
+  const toggleDim = (id) => {
+    setDimmedTeams(s => {
+      const n = new Set(s);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+
+  // AEST time format
+  const timeFmt = now.toLocaleTimeString('en-AU', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Australia/Sydney' });
+  const dateFmt = now.toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Australia/Sydney' });
+  const refreshFmt = lastRefresh.toLocaleTimeString('en-AU', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Australia/Sydney' });
+
+  return (
+    <div className="app" data-screen-label="SLA Dashboard">
+      {/* Sidebar */}
+      <aside className="sidebar">
+        <div className="sidebar-logo">M<span className="red">E</span></div>
+        {[
+          ['dashboard', 'dashboard', 'Dashboard'],
+          ['teams', 'teams', 'Teams'],
+          ['tasks', 'tasks', 'Tasks'],
+          ['reports', 'chart', 'Reports'],
+          ['alerts', 'alerts', 'Alerts'],
+        ].map(([id, icon, label]) => (
+          <button key={id} className={`nav-item ${view === id ? 'active' : ''}`} title={label}
+            onClick={() => setView(id)}>
+            <Icon name={icon} size={20}/>
+          </button>
+        ))}
+        <div className="sidebar-spacer"/>
+        <button className={`nav-item ${view === 'settings' ? 'active' : ''}`} title="Settings"
+          onClick={() => setView('settings')}>
+          <Icon name="settings" size={20}/>
+        </button>
+      </aside>
+
+      <div className="main">
+        {/* Top bar */}
+        <header className="topbar">
+          <div className="topbar-brand">
+            <img src="assets/mezy-logo.png" alt="Mortgage Ezy"/>
+            <div className="divider"/>
+          </div>
+          <div className="topbar-title">
+            <div className="crumb">Operations · So Ezy Integration</div>
+            <h1>{view === 'dashboard' ? 'SLA Performance' :
+                 view === 'teams' ? 'All Teams' :
+                 view === 'tasks' ? 'Active Tasks' :
+                 view === 'reports' ? 'Reports' :
+                 view === 'alerts' ? 'Alerts' :
+                 'Settings'}</h1>
+          </div>
+          <div className="topbar-spacer"/>
+          <div className="live-indicator">
+            <span className="live-dot"/> Live Feed
+          </div>
+          <div className="refresh-stamp">
+            <span className="label">Last refresh (AEST)</span>
+            <span className="time mono" style={{opacity: justRefreshed ? 0.5 : 1, transition: 'opacity .3s'}}>
+              {refreshFmt} · {dateFmt}
+            </span>
+          </div>
+        </header>
+
+        {view === 'dashboard' && (
+        <main className="content">
+          {/* KPI strip */}
+          <section className="kpi-strip">
+            <KpiTile label="Total Active Tasks" value={totalTasks} icon="tasks-sm"
+              delta="+47" deltaDir="up" accent={null}/>
+            <KpiTile label="Overall SLA %" value={overallSla} unit="%" icon="pct"
+              delta={tweaks.simulateBreach ? "-16%" : "-2%"} deltaDir="down"
+              accent={overallSla >= 90 ? 'ok' : overallSla >= 75 ? 'warn' : 'bad'}/>
+            <KpiTile label="Avg Turnaround" value={avgTatAll} unit="h" icon="clock"
+              delta={tweaks.simulateBreach ? "+2.1h" : "+0.4h"} deltaDir="up"
+              accent={avgTatAll > 4 ? 'bad' : null}/>
+            <KpiTile label="Overdue / Breached" value={totalOverdue} icon="flame"
+              delta={tweaks.simulateBreach ? "+58" : "+9"} deltaDir="up"
+              accent={totalOverdue > 10 ? 'bad' : totalOverdue > 0 ? 'warn' : 'ok'}/>
+          </section>
+
+          {/* Team cards + Alerts */}
+          <section className="main-grid">
+            <div>
+              <div className="section-head">
+                <h2 className="section-title">Team Performance</h2>
+                <span className="section-sub">6 operational teams · click any card to drill in</span>
+              </div>
+              <div className="team-grid">
+                {teams.map(t => (
+                  <TeamCard key={t.id} team={t} onClick={() => setActiveTeamId(t.id)}/>
+                ))}
+              </div>
+            </div>
+
+            <AlertsPanel alerts={alerts} onDismiss={(id) => {
+              setDismissedAlerts(s => new Set([...s, id]));
+            }}/>
+          </section>
+
+          {/* Trend chart */}
+          <section className="trend-card">
+            <div className="trend-head">
+              <div>
+                <h2 className="section-title">7-Day SLA Compliance Trend</h2>
+                <div className="section-sub">Rolling SLA % per team · hover for detail</div>
+              </div>
+              <div className="chart-legend">
+                {teams.map(t => (
+                  <span key={t.id}
+                    className={`legend-item ${dimmedTeams.has(t.id) ? 'dim' : ''}`}
+                    onClick={() => toggleDim(t.id)}>
+                    <span className="legend-swatch" style={{background: TEAM_COLORS[t.id]}}/>
+                    {t.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <TrendChart teams={teams} trendData={trend} dimmed={dimmedTeams}/>
+          </section>
+        </main>
+        )}
+
+        {view === 'teams' && (
+          <TeamsView teams={teams} onOpenTeam={(id) => setActiveTeamId(id)}/>
+        )}
+        {view === 'tasks' && (
+          <TasksView teams={teams}/>
+        )}
+        {view === 'reports' && (
+          <ReportsView teams={teams} dimmedTeams={dimmedTeams} toggleDim={toggleDim}/>
+        )}
+        {view === 'alerts' && (
+          <AlertsView alerts={alerts} onDismiss={(id) => setDismissedAlerts(s => new Set([...s, id]))}/>
+        )}
+        {view === 'settings' && (
+          <SettingsView teams={teams} settings={settings}
+            onChange={(k, v) => setSettings(s => ({ ...s, [k]: v }))}/>
+        )}
+      </div>
+
+      {/* Modal */}
+      {activeTeam && <TaskModal team={activeTeam} onClose={() => setActiveTeamId(null)}/>}
+
+      {/* Tweaks */}
+      <div className={`tweaks ${tweaksOpen ? 'open' : ''}`}>
+        <div className="tweaks-head">
+          <span className="title">Tweaks</span>
+          <button className="modal-close" onClick={() => setTweaksOpen(false)} style={{width: 26, height: 26}}>
+            <Icon name="close" size={14}/>
+          </button>
+        </div>
+        <div className="tweaks-body">
+          <div className="tweak">
+            <div className="tweak-label">Simulate SLA breach</div>
+            <div className="tweak-desc">Push every team into breach state to stress-test warning treatments across cards, KPIs, chart, and alerts.</div>
+            <div className="seg" role="tablist">
+              <button className={`seg-btn ${!tweaks.simulateBreach ? 'active' : ''}`}
+                onClick={() => setTweak('simulateBreach', false)}>Normal</button>
+              <button className={`seg-btn ${tweaks.simulateBreach ? 'active' : ''}`}
+                onClick={() => setTweak('simulateBreach', true)}>Breach</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
