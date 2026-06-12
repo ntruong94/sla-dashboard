@@ -59,7 +59,7 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
               stroke="rgba(0,0,0,0.07)" strokeDasharray="3 5" strokeWidth="1"/>
             <text x={pad.left - 10} y={yAt(v) + 4} textAnchor="end"
               fontSize="10" fontFamily="Inter, system-ui, -apple-system, sans-serif"
-              fontWeight="500" letterSpacing="0.06em"
+              fontWeight="400" letterSpacing="0.06em"
               fill="var(--ink-muted)" style={{fontVariantNumeric:'tabular-nums'}}>{v}%</text>
           </g>
         ))}
@@ -68,7 +68,7 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
         {tickIdxs.map(i => (
           <text key={i} x={xAt(i)} y={H - pad.bottom + 20} textAnchor="middle"
             fontSize="10" fontFamily="Inter, system-ui, -apple-system, sans-serif"
-            fontWeight="500" letterSpacing="0.06em"
+            fontWeight="400" letterSpacing="0.06em"
             fill="var(--ink-muted)">{fmtAxisLabel(dates[i], n)}</text>
         ))}
 

@@ -37,7 +37,7 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
 
   const textProps = {
     fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
-    fontWeight: '500',
+    fontWeight: '400',
     fontSize: '10',
     letterSpacing: '0.06em',
     fill: 'var(--ink-muted)',

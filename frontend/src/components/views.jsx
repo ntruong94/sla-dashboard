@@ -1,8 +1,11 @@
 import React from 'react';
 import { Icon } from './icons.jsx';
 import { HistoryChart } from './history-chart.jsx';
-import { TEAM_COLORS, slaClass, slaLabel } from '../constants.js';
+import { AlertsPanel, InfoTip } from './components.jsx';
+import { fmtHMS } from './utils.js';
+import { TEAM_COLORS, slaClass, slaLabel, TOOLTIPS } from '../constants.js';
 import { activeTeams } from '../chartUtils.js';
+import { getAdminUsers, approveUser, rejectUser, getStaffDepartments, getStaffByDepartment } from '../api.js';
 
 // Additional views for sidebar nav routing
 
@@ -29,7 +32,7 @@ const TeamsView = ({ teams, onOpenTeam }) => {
               <th style={{textAlign:'right'}}>Target</th>
               <th style={{textAlign:'right'}}>Overdue</th>
               <th style={{width: 220}}>SLA Compliance</th>
-              <th style={{textAlign:'right', width: 100}}>Status</th>
+              <th style={{textAlign:'right', width: 100}}>Status<InfoTip text={TOOLTIPS.teams.status}/></th>
             </tr>
           </thead>
           <tbody>
@@ -44,16 +47,16 @@ const TeamsView = ({ teams, onOpenTeam }) => {
                     </div>
                   </td>
                   <td><span className="dept-tag" style={{background:`color-mix(in srgb, ${TEAM_COLORS[t.name]} 20%, transparent)`,color:`color-mix(in srgb, ${TEAM_COLORS[t.name]} 80%, #000)`}}>{t.dept}</span></td>
-                  <td style={{textAlign:'right'}} className="mono">{t.volume}</td>
-                  <td style={{textAlign:'right'}} className={`mono ${t.avgTat > t.target ? 'danger-text' : ''}`}>{t.avgTat.toFixed(1)}h</td>
-                  <td style={{textAlign:'right'}} className="mono soft">{t.target}h</td>
-                  <td style={{textAlign:'right'}} className={`mono ${t.overdue > 0 ? 'danger-text' : 'soft'}`}>{t.overdue}</td>
+                  <td style={{textAlign:'right'}}>{t.volume}</td>
+                  <td style={{textAlign:'right', fontWeight: 500, color: t.avgTat > t.target ? undefined : 'var(--ink)'}} className={t.avgTat > t.target ? 'danger-text' : ''}>{fmtHMS(t.avgTat)}</td>
+                  <td style={{textAlign:'right'}} className="soft">{t.target}h</td>
+                  <td style={{textAlign:'right'}} className={t.overdue > 0 ? 'danger-text' : 'soft'}>{t.overdue}</td>
                   <td>
                     <div style={{display:'flex',alignItems:'center',gap:10}}>
                       <div className="progress" style={{flex:1}}>
                         <div className={`progress-fill ${cls}`} style={{width:`${t.sla}%`}}/>
                       </div>
-                      <span className="mono" style={{width:42,textAlign:'right',fontSize:12,fontWeight:600}}>{t.sla}%</span>
+                      <span style={{width:42,textAlign:'right',fontSize:12,fontWeight:600}}>{t.sla}%</span>
                     </div>
                   </td>
                   <td style={{textAlign:'right'}}>
@@ -153,7 +156,7 @@ const TasksView = ({ teams, tasks }) => {
               const pct = Math.min(t.tatHours / t.target, 1.6);
               return (
                 <tr key={t.teamId + '-' + t.id} className={rowCls}>
-                  <td><span className="mono task-id">{t.id}</span></td>
+                  <td><span className="task-id">{t.id}</span></td>
                   <td>
                     <div className="task-desc-main">{t.desc}</div>
                     <div className="task-client">{t.client}</div>
@@ -329,10 +332,10 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
                     <strong>{team.name}</strong>
                   </div>
                 </td>
-                <td style={{textAlign:'right'}} className="mono">{avg}%</td>
-                <td style={{textAlign:'right'}} className="mono soft">{min}%</td>
-                <td style={{textAlign:'right'}} className="mono soft">{max}%</td>
-                <td style={{textAlign:'right'}} className={`mono ${delta < 0 ? 'danger-text' : delta > 0 ? 'ok-text' : 'soft'}`}>
+                <td style={{textAlign:'right', fontWeight:500, color:'var(--ink)'}}>{avg}%</td>
+                <td style={{textAlign:'right', fontWeight:500, color:'var(--ink)'}}>{min}%</td>
+                <td style={{textAlign:'right', fontWeight:500, color:'var(--ink)'}}>{max}%</td>
+                <td style={{textAlign:'right'}} className={delta < 0 ? 'danger-text' : delta > 0 ? 'ok-text' : 'soft'}>
                   {delta > 0 ? '+' : ''}{delta}%
                 </td>
                 <td>
@@ -374,7 +377,7 @@ const AlertsView = ({ alerts, onDismiss }) => {
       <div className="page-head">
         <div>
           <div className="crumb">Operations</div>
-          <h1 className="page-title">Active Alerts</h1>
+          <h1 className="page-title">Active Alerts<InfoTip text={TOOLTIPS.alerts.panel} width={280}/></h1>
           <div className="page-sub">{alerts.length} alerts · {critical.length} critical, {warning.length} warning</div>
         </div>
       </div>
@@ -383,35 +386,89 @@ const AlertsView = ({ alerts, onDismiss }) => {
         <div className="trend-card" style={{padding:'48px 24px',textAlign:'center'}}>
           <div style={{fontSize:32,marginBottom:8}}>✓</div>
           <div style={{fontWeight:600,marginBottom:4}}>All clear</div>
-          <div style={{color:'var(--ink-muted)',fontSize:13}}>No active alerts. All teams operating within thresholds.</div>
+          <div style={{color:'var(--ink-muted)',fontSize:10}}>No active alerts. All teams operating within thresholds.</div>
         </div>
       ) : (
-        <div className="alerts-panel" style={{maxWidth:'none'}}>
-          <div className="alerts-list">
-            {alerts.map(a => (
-              <div key={a.id} className={`alert ${a.severity}`}>
-                <div className="alert-icon">
-                  <Icon name={a.severity === 'critical' ? 'alert-critical' : 'alert-warning'} size={14}/>
-                </div>
-                <div className="alert-body">
-                  <div className="alert-title">{a.title}</div>
-                  <div className="alert-desc">{a.desc}</div>
-                </div>
-                <div className="alert-time">{a.time}</div>
-                <button className="alert-dismiss" onClick={() => onDismiss(a.id)} aria-label="Dismiss">
-                  <Icon name="close" size={12}/>
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
+        <AlertsPanel alerts={alerts} onDismiss={onDismiss}/>
       )}
     </main>
   );
 };
 
 // ===== SETTINGS VIEW — configurable SLA targets =====
-const SettingsView = ({ teams, settings, onChange }) => {
+const SettingsView = ({ teams, settings, onApply, onReset }) => {
+  const makeDraft = (s) => ({
+    targets:        { ...s.targets },
+    refreshMin:     s.refreshMin,
+    atRiskPct:      s.atRiskPct,
+    modalTaskCount: s.modalTaskCount,
+    loanTargets: {
+      received: s.loanTargets?.received ?? 10,
+      approved: s.loanTargets?.approved ?? 10,
+      settled:  s.loanTargets?.settled  ?? 10,
+    },
+  });
+
+  const [draft, setDraft]           = React.useState(() => makeDraft(settings));
+  const [applyStatus, setApplyStatus] = React.useState('idle'); // idle | saving | saved | error
+  const [errorMsg, setErrorMsg]     = React.useState('');
+
+  // Re-sync draft when settings change (after Apply or Reset)
+  React.useEffect(() => {
+    setDraft(makeDraft(settings));
+  }, [settings]);
+
+  const setTarget = (id, val) =>
+    setDraft(d => ({ ...d, targets: { ...d.targets, [id]: val } }));
+
+  const setLoanTarget = (key, val) =>
+    setDraft(d => ({ ...d, loanTargets: { ...d.loanTargets, [key]: val } }));
+
+  const validate = (d) => {
+    if (!d.refreshMin || d.refreshMin < 1 || d.refreshMin > 60)
+      return 'Refresh interval must be between 1 and 60 minutes.';
+    if (!d.atRiskPct || d.atRiskPct < 50 || d.atRiskPct >= 100)
+      return 'At Risk threshold must be between 50% and 99%.';
+    if (!d.modalTaskCount || d.modalTaskCount < 1 || d.modalTaskCount > 100)
+      return 'Tasks in drill-down must be between 1 and 100.';
+    for (const [, v] of Object.entries(d.targets)) {
+      if (!v || v < 0.5 || v > 168)
+        return 'SLA target hours must be between 0.5 and 168.';
+    }
+    return null;
+  };
+
+  const handleApply = () => {
+    const err = validate(draft);
+    if (err) { setErrorMsg(err); setApplyStatus('error'); return; }
+    setApplyStatus('saving');
+    setErrorMsg('');
+    try {
+      onApply({
+        targets:        draft.targets,
+        refreshMin:     Number(draft.refreshMin),
+        atRiskPct:      Number(draft.atRiskPct),
+        modalTaskCount: Number(draft.modalTaskCount),
+        loanTargets: {
+          received: Number(draft.loanTargets.received),
+          approved: Number(draft.loanTargets.approved),
+          settled:  Number(draft.loanTargets.settled),
+        },
+      });
+      setApplyStatus('saved');
+      setTimeout(() => setApplyStatus('idle'), 2500);
+    } catch {
+      setApplyStatus('error');
+      setErrorMsg('Failed to save settings.');
+    }
+  };
+
+  const handleReset = () => {
+    onReset();
+    setApplyStatus('idle');
+    setErrorMsg('');
+  };
+
   return (
     <main className="content">
       <div className="page-head">
@@ -421,6 +478,33 @@ const SettingsView = ({ teams, settings, onChange }) => {
           <div className="page-sub">Configurable SLA targets and refresh thresholds</div>
         </div>
       </div>
+
+      <section className="trend-card" style={{padding:'22px 26px'}}>
+        <h2 className="section-title" style={{marginBottom:4}}>Loan Targets</h2>
+        <div className="section-sub" style={{marginBottom:18}}>Daily application count targets displayed on each loan summary card.</div>
+
+        <div className="settings-grid">
+          {[
+            { key: 'received', label: 'Application Received', sub: 'Applications received today' },
+            { key: 'approved', label: 'Funder Approvals',     sub: 'Funder approvals today'     },
+            { key: 'settled',  label: 'Settlements',          sub: 'Settlements today'           },
+          ].map(({ key, label, sub }) => (
+            <div key={key} className="setting-row">
+              <div className="setting-meta">
+                <div>
+                  <div style={{fontWeight:600,fontSize:14}}>{label}</div>
+                </div>
+              </div>
+              <div className="setting-input">
+                <input type="number" min="1" max="9999" step="1"
+                  value={draft.loanTargets[key]}
+                  onChange={e => setLoanTarget(key, +e.target.value)}/>
+                <span className="setting-unit">applications</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <section className="trend-card" style={{padding:'22px 26px'}}>
         <h2 className="section-title" style={{marginBottom:4}}>SLA Targets per Team</h2>
@@ -433,13 +517,13 @@ const SettingsView = ({ teams, settings, onChange }) => {
                 <span style={{width:8,height:24,borderRadius:2,background:TEAM_COLORS[t.name]}}/>
                 <div>
                   <div style={{fontWeight:600,fontSize:14}}>{t.name}</div>
-                  <div style={{fontSize:11,color:'var(--ink-muted)',letterSpacing:'0.06em',textTransform:'uppercase'}}>{t.dept}</div>
+                  <div style={{fontSize:10,color:'var(--ink-muted)',letterSpacing:'0.06em',textTransform:'uppercase'}}>{t.dept}</div>
                 </div>
               </div>
               <div className="setting-input">
-                <input type="number" min="1" max="48" step="0.5"
-                  value={settings.targets[t.id] ?? t.target}
-                  onChange={e => onChange('targets', { ...settings.targets, [t.id]: +e.target.value })}/>
+                <input type="number" min="0.5" max="168" step="0.5"
+                  value={draft.targets[t.id] ?? t.target}
+                  onChange={e => setTarget(t.id, +e.target.value)}/>
                 <span className="setting-unit">hours</span>
               </div>
             </div>
@@ -456,13 +540,14 @@ const SettingsView = ({ teams, settings, onChange }) => {
             <div className="setting-meta">
               <Icon name="clock" size={18}/>
               <div>
-                <div style={{fontWeight:600,fontSize:14}}>Refresh interval</div>
+                <div style={{fontWeight:600,fontSize:14}}>Refresh interval<InfoTip width={280} text={"How often the dashboard silently fetches fresh data from the database.\n\nNo page reload — all cards update in the background.\n\nWhat refreshes:\n- KPI tiles\n- Team cards\n- Tasks list\n- Alerts\n- Loan summary\n\nWhat does NOT auto-refresh:\n- History chart (only loads on login or Apply)\n\nValid range: 1–60 minutes.\nDefault: 5 minutes."}/></div>
                 <div style={{fontSize:12,color:'var(--ink-muted)'}}>How often to poll So Ezy</div>
               </div>
             </div>
             <div className="setting-input">
-              <input type="number" min="1" max="60" value={settings.refreshMin}
-                onChange={e => onChange('refreshMin', +e.target.value)}/>
+              <input type="number" min="1" max="60"
+                value={draft.refreshMin}
+                onChange={e => setDraft(d => ({ ...d, refreshMin: +e.target.value }))}/>
               <span className="setting-unit">minutes</span>
             </div>
           </div>
@@ -471,13 +556,14 @@ const SettingsView = ({ teams, settings, onChange }) => {
             <div className="setting-meta">
               <Icon name="alerts" size={18}/>
               <div>
-                <div style={{fontWeight:600,fontSize:14}}>At Risk threshold</div>
+                <div style={{fontWeight:600,fontSize:14}}>At Risk threshold<InfoTip width={300} text={"How it works:\nA task turns amber before it breaches SLA.\n\nTask states (consumed = time spent ÷ SLA target):\n- Green — below threshold (on track)\n- Amber — at or above threshold (at risk)\n- Red — above 100% (overdue / breached)\n\nExamples with a 4h SLA target:\n- 50% threshold → amber at 2h, red at 4h\n- 87.5% (default) → amber at 3.5h, red at 4h\n\nApplies to:\n- Task list row colours\n- Alerts panel drill-down\n- Warning alerts per team"}/></div>
                 <div style={{fontSize:12,color:'var(--ink-muted)'}}>% of target before flagging</div>
               </div>
             </div>
             <div className="setting-input">
-              <input type="number" min="50" max="100" value={settings.atRiskPct}
-                onChange={e => onChange('atRiskPct', +e.target.value)}/>
+              <input type="number" min="50" max="99"
+                value={draft.atRiskPct}
+                onChange={e => setDraft(d => ({ ...d, atRiskPct: +e.target.value }))}/>
               <span className="setting-unit">%</span>
             </div>
           </div>
@@ -486,25 +572,437 @@ const SettingsView = ({ teams, settings, onChange }) => {
             <div className="setting-meta">
               <Icon name="tasks-sm" size={18}/>
               <div>
-                <div style={{fontWeight:600,fontSize:14}}>Tasks in drill-down</div>
+                <div style={{fontWeight:600,fontSize:14}}>Tasks in drill-down<InfoTip width={260} text={"Max number of tasks shown when you click into a team card or alert.\n\nTasks are ranked by SLA consumption (highest first), so the most critical items appear at the top.\n\nValid range: 1–100.\nDefault: 10."}/></div>
                 <div style={{fontSize:12,color:'var(--ink-muted)'}}>Top N shown in modal</div>
               </div>
             </div>
             <div className="setting-input">
-              <input type="number" min="5" max="50" value={settings.modalTaskCount}
-                onChange={e => onChange('modalTaskCount', +e.target.value)}/>
+              <input type="number" min="1" max="100"
+                value={draft.modalTaskCount}
+                onChange={e => setDraft(d => ({ ...d, modalTaskCount: +e.target.value }))}/>
               <span className="setting-unit">tasks</span>
             </div>
           </div>
         </div>
 
-        <div style={{marginTop:18,paddingTop:16,borderTop:'1px solid var(--line)',display:'flex',gap:10,justifyContent:'flex-end'}}>
-          <button className="btn-secondary">Reset defaults</button>
-          <button className="btn-primary">Apply changes</button>
+        <div style={{marginTop:18,paddingTop:16,borderTop:'1px solid var(--line)',display:'flex',gap:10,justifyContent:'flex-end',alignItems:'center'}}>
+          {applyStatus === 'saved' && (
+            <span style={{fontSize:14,color:'var(--ok)',fontWeight:500,marginRight:'auto'}}>✓ Settings applied — dashboard updated</span>
+          )}
+          {applyStatus === 'error' && (
+            <span style={{fontSize:14,color:'var(--bad)',fontWeight:500,marginRight:'auto'}}>{errorMsg || 'Invalid values — check inputs'}</span>
+          )}
+          <button className="btn-secondary" onClick={handleReset} disabled={applyStatus === 'saving'}>Reset defaults</button>
+          <button className="btn-primary" onClick={handleApply} disabled={applyStatus === 'saving'}>
+            {applyStatus === 'saving' ? 'Applying…' : 'Apply changes'}
+          </button>
         </div>
       </section>
     </main>
   );
 };
 
-export { TeamsView, TasksView, ReportsView, AlertsView, SettingsView };
+export { TeamsView, TasksView, ReportsView, AlertsView, SettingsView, StaffListView, AdminView };
+
+// ===== STAFF LIST VIEW — department staff counts with drill-through =====
+function StaffListView() {
+  const [departments, setDepartments] = React.useState([]);
+  const [loading, setLoading]         = React.useState(true);
+  const [error, setError]             = React.useState('');
+  const [search, setSearch]           = React.useState('');
+  const [drillDept, setDrillDept]     = React.useState(null); // { deptId, deptName } | null
+  const [drillData, setDrillData]     = React.useState({ staff: [], loading: false, error: '' });
+
+  const filtered = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return departments;
+    return departments.filter(d =>
+      String(d.departmentId).includes(q) ||
+      (d.departmentName || '').toLowerCase().includes(q)
+    );
+  }, [departments, search]);
+
+  const load = React.useCallback(() => {
+    setLoading(true);
+    setError('');
+    getStaffDepartments()
+      .then(data => { setDepartments(data); setLoading(false); })
+      .catch(err  => { setError(err.message); setLoading(false); });
+  }, []);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const openDrill = (dept) => {
+    setDrillDept({ deptId: dept.departmentId, deptName: dept.departmentName });
+    setDrillData({ staff: [], loading: true, error: '' });
+    getStaffByDepartment(dept.departmentId)
+      .then(staff => setDrillData({ staff, loading: false, error: '' }))
+      .catch(err  => setDrillData({ staff: [], loading: false, error: err.message }));
+  };
+
+  const closeDrill = React.useCallback(() => { setDrillDept(null); }, []);
+
+  React.useEffect(() => {
+    if (!drillDept) return;
+    const onKey = (e) => { if (e.key === 'Escape') closeDrill(); };
+    window.addEventListener('keydown', onKey);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = '';
+    };
+  }, [drillDept, closeDrill]);
+
+  return (
+    <main className="content">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Staff List</h1>
+          <div className="page-sub">
+            {loading
+              ? 'Loading…'
+              : error
+                ? 'Unable to load departments'
+                : `There are total ${departments.length} departments in SoEzy`
+            }
+          </div>
+        </div>
+        <input
+          type="text"
+          placeholder="Search department…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ marginLeft: 'auto', padding: '7px 12px', fontSize: 13, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--ink)', width: 220, outline: 'none' }}
+        />
+        <button className="btn-secondary" onClick={load} style={{ marginLeft: 10 }}>
+          Refresh
+        </button>
+      </div>
+
+      {loading && (
+        <div className="trend-card" style={{ padding: '48px 24px', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+          Loading departments…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="trend-card" style={{ padding: '32px 24px', textAlign: 'center' }}>
+          <div style={{ color: 'var(--bad)', fontWeight: 600, marginBottom: 8 }}>Failed to load</div>
+          <div style={{ color: 'var(--ink-muted)', fontSize: 13 }}>{error}</div>
+        </div>
+      )}
+
+      {!loading && !error && (
+        <section className="trend-card" style={{ padding: '22px 26px' }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+              {departments.length === 0 ? 'No departments found' : 'No departments match your search'}
+            </div>
+          ) : (
+            <table className="teams-table">
+              <thead>
+                <tr>
+                  <th>Department ID</th>
+                  <th>Department Name</th>
+                  <th style={{ textAlign: 'right' }}>Total Staff Count</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(d => (
+                  <tr key={d.departmentId} onClick={() => openDrill(d)} style={{ cursor: 'pointer' }}>
+                    <td><span className="soft">{d.departmentId}</span></td>
+                    <td><strong>{d.departmentName || <em className="soft">—</em>}</strong></td>
+                    <td style={{ textAlign: 'right', fontWeight: 600 }}>{d.totalStaff}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      {/* Drill-through modal */}
+      {drillDept && (
+        <div className="modal-overlay" onClick={closeDrill}>
+          <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="modal-head">
+              <div className="modal-head-top">
+                <div className="modal-title">
+                  <div className="sub">Staff · {drillDept.deptName}</div>
+                  <h2>{drillDept.deptName}</h2>
+                  {!drillData.loading && !drillData.error && (
+                    <div style={{ fontSize: 12, color: 'var(--ink-muted)', marginTop: 4 }}>
+                      {drillData.staff.length} active staff member{drillData.staff.length !== 1 ? 's' : ''}
+                    </div>
+                  )}
+                </div>
+                <button className="modal-close" onClick={closeDrill} aria-label="Close">
+                  <Icon name="close" size={18}/>
+                </button>
+              </div>
+            </div>
+
+            {drillData.loading && (
+              <div style={{ padding: '40px 28px', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+                Loading staff…
+              </div>
+            )}
+
+            {!drillData.loading && drillData.error && (
+              <div style={{ padding: '28px', color: 'var(--bad)', fontSize: 14 }}>
+                {drillData.error}
+              </div>
+            )}
+
+            {!drillData.loading && !drillData.error && drillData.staff.length === 0 && (
+              <div style={{ padding: '40px 28px', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+                No active staff in this department
+              </div>
+            )}
+
+            {!drillData.loading && !drillData.error && drillData.staff.length > 0 && (
+              <div className="modal-body">
+                <table className="task-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: 100 }}>Staff ID</th>
+                      <th>Full Name</th>
+                      <th style={{ textAlign: 'center', width: 150 }}>Employee Status</th>
+                      <th style={{ textAlign: 'center', width: 100 }}>IsGroup</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drillData.staff.map(s => (
+                      <tr key={s.staffId}>
+                        <td><span className="soft" style={{ fontSize: 12 }}>{s.staffId}</span></td>
+                        <td><strong>{s.fullName || '—'}</strong></td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, padding: '3px 10px', borderRadius: 10, background: 'color-mix(in srgb, var(--ok) 18%, transparent)', color: 'var(--ok)' }}>
+                            ACTIVE
+                          </span>
+                        </td>
+                        <td style={{ textAlign: 'center', color: 'var(--ink-muted)', fontSize: 13 }}>
+                          {s.isGroup ? 'Yes' : 'No'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+// ===== ADMIN VIEW — user approval management (admin only) =====
+function AdminView() {
+  const [users, setUsers]       = React.useState([]);
+  const [loading, setLoading]   = React.useState(true);
+  const [error, setError]       = React.useState('');
+  const [busy, setBusy]         = React.useState({}); // { [userId]: 'approving' | 'rejecting' }
+  const [msgs, setMsgs]         = React.useState({}); // { [userId]: 'approved' | 'rejected' | 'error' }
+
+  const load = React.useCallback(() => {
+    setLoading(true);
+    setError('');
+    getAdminUsers()
+      .then(data => { setUsers(data); setLoading(false); })
+      .catch(err  => { setError(err.message); setLoading(false); });
+  }, []);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const doApprove = async (id) => {
+    setBusy(b => ({ ...b, [id]: 'approving' }));
+    try {
+      await approveUser(id);
+      setMsgs(m => ({ ...m, [id]: 'approved' }));
+      setUsers(us => us.map(u => u.id === id ? { ...u, status: 'approved' } : u));
+    } catch {
+      setMsgs(m => ({ ...m, [id]: 'error' }));
+    } finally {
+      setBusy(b => ({ ...b, [id]: null }));
+    }
+  };
+
+  const doReject = async (id) => {
+    setBusy(b => ({ ...b, [id]: 'rejecting' }));
+    try {
+      await rejectUser(id);
+      setMsgs(m => ({ ...m, [id]: 'rejected' }));
+      setUsers(us => us.map(u => u.id === id ? { ...u, status: 'rejected' } : u));
+    } catch {
+      setMsgs(m => ({ ...m, [id]: 'error' }));
+    } finally {
+      setBusy(b => ({ ...b, [id]: null }));
+    }
+  };
+
+  const STATUS_STYLE = {
+    pending:  { background: 'color-mix(in srgb, var(--warn) 18%, transparent)', color: 'var(--warn)',  fontWeight: 600 },
+    approved: { background: 'color-mix(in srgb, var(--ok)   18%, transparent)', color: 'var(--ok)',   fontWeight: 600 },
+    rejected: { background: 'color-mix(in srgb, var(--bad)  18%, transparent)', color: 'var(--bad)',  fontWeight: 600 },
+  };
+
+  const pending  = users.filter(u => u.status === 'pending');
+  const rest     = users.filter(u => u.status !== 'pending');
+
+  return (
+    <main className="content">
+      <div className="page-head">
+        <div>
+          <div className="crumb">Admin</div>
+          <h1 className="page-title">User Management</h1>
+          <div className="page-sub">Approve or reject dashboard access requests</div>
+        </div>
+        <button className="btn-secondary" onClick={load} style={{ marginLeft: 'auto' }}>
+          Refresh
+        </button>
+      </div>
+
+      {loading && (
+        <div className="trend-card" style={{ padding: '48px 24px', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+          Loading users…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="trend-card" style={{ padding: '32px 24px', textAlign: 'center' }}>
+          <div style={{ color: 'var(--bad)', fontWeight: 600, marginBottom: 8 }}>Failed to load users</div>
+          <div style={{ color: 'var(--ink-muted)', fontSize: 13 }}>{error}</div>
+        </div>
+      )}
+
+      {!loading && !error && (
+        <>
+          {/* Pending section */}
+          <section className="trend-card" style={{ padding: '22px 26px', marginBottom: 20 }}>
+            <h2 className="section-title" style={{ marginBottom: 4 }}>
+              Pending Approval
+              {pending.length > 0 && (
+                <span style={{ marginLeft: 10, fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: 'color-mix(in srgb, var(--warn) 20%, transparent)', color: 'var(--warn)' }}>
+                  {pending.length}
+                </span>
+              )}
+            </h2>
+            <div className="section-sub" style={{ marginBottom: 18 }}>Users awaiting review</div>
+
+            {pending.length === 0 ? (
+              <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+                ✓ No pending requests
+              </div>
+            ) : (
+              <table className="teams-table">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Company</th>
+                    <th>Requested</th>
+                    <th style={{ textAlign: 'center' }}>Status</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pending.map(u => (
+                    <tr key={u.id}>
+                      <td><strong>{u.email}</strong></td>
+                      <td>{u.companyName}</td>
+                      <td className="soft">{new Date(u.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span style={{ ...STATUS_STYLE[u.status], padding: '2px 10px', borderRadius: 10, fontSize: 12, textTransform: 'capitalize' }}>
+                          {msgs[u.id] === 'error' ? 'Error' : u.status}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                          <button
+                            className="btn-primary"
+                            style={{ padding: '5px 14px', fontSize: 12 }}
+                            disabled={!!busy[u.id]}
+                            onClick={() => doApprove(u.id)}
+                          >
+                            {busy[u.id] === 'approving' ? 'Approving…' : 'Approve'}
+                          </button>
+                          <button
+                            className="btn-secondary"
+                            style={{ padding: '5px 14px', fontSize: 12, color: 'var(--bad)', borderColor: 'var(--bad)' }}
+                            disabled={!!busy[u.id]}
+                            onClick={() => doReject(u.id)}
+                          >
+                            {busy[u.id] === 'rejecting' ? 'Rejecting…' : 'Reject'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          {/* All users section */}
+          {rest.length > 0 && (
+            <section className="trend-card" style={{ padding: '22px 26px' }}>
+              <h2 className="section-title" style={{ marginBottom: 4 }}>All Users</h2>
+              <div className="section-sub" style={{ marginBottom: 18 }}>Approved and rejected accounts</div>
+              <table className="teams-table">
+                <thead>
+                  <tr>
+                    <th>Email</th>
+                    <th>Company</th>
+                    <th>Role</th>
+                    <th>Joined</th>
+                    <th style={{ textAlign: 'center' }}>Status</th>
+                    <th style={{ textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rest.map(u => (
+                    <tr key={u.id}>
+                      <td><strong>{u.email}</strong></td>
+                      <td>{u.companyName}</td>
+                      <td><span className="dept-tag">{u.role}</span></td>
+                      <td className="soft">{new Date(u.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span style={{ ...STATUS_STYLE[u.status], padding: '2px 10px', borderRadius: 10, fontSize: 12, textTransform: 'capitalize' }}>
+                          {msgs[u.id] === 'error' ? 'Error' : u.status}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                          {u.status !== 'approved' && (
+                            <button
+                              className="btn-primary"
+                              style={{ padding: '5px 14px', fontSize: 12 }}
+                              disabled={!!busy[u.id]}
+                              onClick={() => doApprove(u.id)}
+                            >
+                              {busy[u.id] === 'approving' ? 'Approving…' : 'Approve'}
+                            </button>
+                          )}
+                          {u.status !== 'rejected' && u.role !== 'admin' && (
+                            <button
+                              className="btn-secondary"
+                              style={{ padding: '5px 14px', fontSize: 12, color: 'var(--bad)', borderColor: 'var(--bad)' }}
+                              disabled={!!busy[u.id]}
+                              onClick={() => doReject(u.id)}
+                            >
+                              {busy[u.id] === 'rejecting' ? 'Rejecting…' : 'Reject'}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
+        </>
+      )}
+    </main>
+  );
+}

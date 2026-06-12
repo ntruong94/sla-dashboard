@@ -55,6 +55,8 @@ export const Icon = ({ name, size = 16 }) => {
     );
     case 'flame': return <svg {...p}><path d="M12 22c4.5 0 7-3 7-6.5 0-3-2-5-3.5-6-.5 1.5-2 2-2 2s-.5-2-2-4c-1 1-1.5 2.5-1.5 4 0 1.5-1.5 2-1.5 4C8.5 18.5 7.5 22 12 22z"/><path d="M12 17c1.5 0 2.5-1 2.5-2.5 0-1-.5-1.5-1-2-.5.5-.5 1-.5 1s-.5-.5-.5-1.5C12 11 11 12 11 14.5c0 1.5 1 2.5 1 2.5z" fill="currentColor" stroke="none"/></svg>;
     case 'grid': return <svg {...p}><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>;
+    case 'user-shield': return <svg {...p}><path d="M12 2l7 3v5c0 4.5-3 8-7 9-4-1-7-4.5-7-9V5l7-3z"/><circle cx="12" cy="10" r="2.5"/><path d="M8.5 17c.5-2 2-3 3.5-3s3 1 3.5 3"/></svg>;
+    case 'staff-list': return <svg {...p}><circle cx="7" cy="7.5" r="3"/><path d="M1.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><line x1="15" y1="7" x2="22" y2="7"/><line x1="15" y1="11" x2="22" y2="11"/><line x1="15" y1="15" x2="20" y2="15"/></svg>;
     default: return null;
   }
 };

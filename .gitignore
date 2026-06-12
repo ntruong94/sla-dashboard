@@ -7,6 +7,12 @@ backend/node_modules/
 .env
 backend/.env
 frontend/.env
+frontend/.env.local
+**/.env.local
+**/.env.*.local
+
+# Cloudflare tunnel certificate — contains private key, never commit
+*.pem
 
 # Build output
 frontend/dist/

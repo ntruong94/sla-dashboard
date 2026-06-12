@@ -2,12 +2,12 @@
 import '../styles.css';
 import '../styles-views.css';
 import MezyIconDark from './MezyIcon_Dark';
-import { getKpiSummary, getTeams, getTasks, getHistory, getAlerts } from './api';
+import { getKpiSummary, getTeams, getTasks, getHistory, getAlerts, getLoanSummary, getLoanDetail } from './api';
 import { Icon } from './components/icons.jsx';
-import { KpiTile, TeamCard, AlertsPanel, TaskModal } from './components/components.jsx';
+import { KpiTile, TeamCard, AlertsPanel, TaskModal, InfoTip, LoanKpiTile, LoanModal } from './components/components.jsx';
 import { TrendChart } from './components/trend.jsx';
-import { TeamsView, TasksView, ReportsView, AlertsView, SettingsView } from './components/views.jsx';
-import { TEAM_COLORS } from './constants.js';
+import { TeamsView, TasksView, ReportsView, AlertsView, SettingsView, StaffListView, AdminView } from './components/views.jsx';
+import { TEAM_COLORS, TOOLTIPS } from './constants.js';
 import { isWeekend, activeTeams, fmtAxisLabel } from './chartUtils.js';
 import Mezylogin from './Mezylogin.jsx';
 
@@ -20,15 +20,28 @@ function fmtDelta(val, unit = '') {
   return `${sign}${val}${unit}`;
 }
 
-function normalizeTask(t) {
-  const tatH = t.TotalHoursOnTask ?? 0;
-  const slaH = t.SLAInHours ?? 4;
-  const pct  = slaH > 0 ? tatH / slaH : 0;
+function fmtHMS(hours) {
+  const totalSec = Math.round(Math.abs(hours ?? 0) * 3600);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+const DEFAULT_SETTINGS = { targets: {}, refreshMin: 5, atRiskPct: 87.5, modalTaskCount: 10, loanTargets: { received: 10, approved: 10, settled: 10 } };
+
+function normalizeTask(t, settings = {}) {
+  const tatH    = t.TotalHoursOnTask ?? 0;
+  const baseSla = t.SLAInHours ?? 4;
+  const slaH    = settings.targets?.[t.QueueId] || baseSla;
+  const atRisk  = (settings.atRiskPct ?? 87.5) / 100;
+  const pct     = slaH > 0 ? tatH / slaH : 0;
+  const status  = pct > 1 ? 'bad' : pct >= atRisk ? 'warn' : 'ok';
   return {
     id:       `T-${t.TaskID}`,
     desc:     t.TaskName       || 'Unnamed Task',
     client:   t.ClientName     || t.AssignedToName || '-',
-    status:   t.status         || (pct > 1 ? 'bad' : pct >= 0.875 ? 'warn' : 'ok'),
+    status,
     tatHours: tatH,
     priority: t.Priority === 'high' ? 'high' : t.Priority === 'med' ? 'med' : 'low',
     target:   slaH,
@@ -37,10 +50,10 @@ function normalizeTask(t) {
   };
 }
 
-function groupTasksByTeam(rawTasks) {
+function groupTasksByTeam(rawTasks, settings = {}) {
   const out = {};
   rawTasks.forEach(t => {
-    const norm = normalizeTask(t);
+    const norm = normalizeTask(t, settings);
     if (!out[norm.teamId]) out[norm.teamId] = [];
     out[norm.teamId].push(norm);
   });
@@ -98,29 +111,82 @@ const NAV_MAIN = [
   { id: 'alerts',    label: 'Alerts',    icon: 'alerts'    },
 ];
 
+function getStoredUser() {
+  try { return JSON.parse(localStorage.getItem('sla_user') || '{}'); } catch { return {}; }
+}
+
 // â”€â”€â”€ Root App â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function App() {
   // Auth gate — must be the first hook so it is always called
-  const [authed, setAuthed] = useState(() => localStorage.getItem('mezyAuth') === 'true');
+  const [authed, setAuthed]   = useState(() => !!localStorage.getItem('sla_token'));
+  const [userRole, setUserRole] = useState(() => getStoredUser().role || 'viewer');
 
-  const handleLogin  = useCallback(() => { localStorage.setItem('mezyAuth', 'true');  setAuthed(true);  }, []);
-  const handleLogout = useCallback(() => { localStorage.removeItem('mezyAuth');        setAuthed(false); }, []);
+  const handleLogin  = useCallback((token, user) => {
+    localStorage.setItem('sla_token', token);
+    localStorage.setItem('sla_user', JSON.stringify(user));
+    setUserRole(user.role || 'viewer');
+    setError('');
+    setLoading(true);
+    setAuthed(true);
+  }, []);
+  const handleLogout = useCallback(() => {
+    localStorage.removeItem('sla_token');
+    localStorage.removeItem('sla_user');
+    setUserRole('viewer');
+    setAuthed(false);
+  }, []);
+
+  // Listen for forced logout (e.g. token expired mid-session)
+  useEffect(() => {
+    const onLogout = () => handleLogout();
+    window.addEventListener('sla_logout', onLogout);
+    return () => window.removeEventListener('sla_logout', onLogout);
+  }, [handleLogout]);
 
   const [view, setView]               = useState('dashboard');
   const [kpi, setKpi]                 = useState({ totalTasks: 0, overallSla: 0, avgTat: 0, totalOverdue: 0, deltas: { totalTasks: 0, overallSla: 0, avgTat: 0, totalOverdue: 0 } });
   const [teams, setTeams]             = useState([]);
-  const [tasksByTeam, setTasksByTeam] = useState({});
+  const [rawTasks, setRawTasks]       = useState([]);
   const [history, setHistory]         = useState(null);
   const [alerts, setAlerts]           = useState([]);
+  const [loanSummary, setLoanSummary] = useState({ received: { count: 0, amount: 0, deltas: { count: 0, amount: 0 } }, approved: { count: 0, amount: 0, deltas: { count: 0, amount: 0 } }, settled: { count: 0, amount: 0, deltas: { count: 0, amount: 0 } } });
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState('');
   const [dimmedTeams, setDimmed]      = useState(new Set());
   const [modalTeamId, setModalTeamId] = useState(null);
-  const [settings, setSettings]       = useState({ targets: {}, refreshMin: 5, atRiskPct: 87.5, modalTaskCount: 10 });
+  const [loanModal, setLoanModal]     = useState(null); // { type, label } | null
+  const [loanDetail, setLoanDetail]   = useState({ data: [], loading: false, error: null });
+  const [settings, setSettings]       = useState(() => {
+    try {
+      const saved = localStorage.getItem('sla_dash_settings');
+      if (!saved) return DEFAULT_SETTINGS;
+      const parsed = JSON.parse(saved);
+      return {
+        ...DEFAULT_SETTINGS,
+        ...parsed,
+        targets:     { ...DEFAULT_SETTINGS.targets,     ...(parsed.targets     || {}) },
+        loanTargets: { ...DEFAULT_SETTINGS.loanTargets, ...(parsed.loanTargets || {}) },
+      };
+    } catch { return DEFAULT_SETTINGS; }
+  });
 
   // Watermark — fixed to viewport centre, no parallax
   const watermarkRef = useRef(null);
+  // Refs for stable values used inside callbacks that must not change on every render
+  const settingsRef = useRef(settings);
+  const teamsRef    = useRef([]);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+  useEffect(() => { teamsRef.current = teams; },    [teams]);
+
+  // Safety-net: always persist settings to localStorage whenever they change.
+  // This ensures Apply changes is never the only write path, and that settings
+  // survive page refresh, logout/login, and backend restarts.
+  useEffect(() => {
+    try { localStorage.setItem('sla_dash_settings', JSON.stringify(settings)); } catch (e) {
+      console.warn('[settings] Failed to persist to localStorage:', e.message);
+    }
+  }, [settings]);
 
   // Live AEST clock
   const [now, setNow]                     = useState(new Date());
@@ -132,25 +198,57 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
-  // Initial data load — history is decoupled (slow cold-scan) and won't block KPI/teams
-  useEffect(() => {
+  // Shared refresh function — reads targets from settingsRef so the interval
+  // always uses the latest configured values without recreating on every settings change.
+  const refreshData = useCallback(() => {
+    const targets = settingsRef.current?.targets || {};
     Promise.all([
-      getKpiSummary(),
-      getTeams(),
+      getKpiSummary(targets),
+      getTeams(targets),
       getTasks(),
-      getAlerts(),
+      getAlerts(targets),
+      getLoanSummary(),
     ])
-      .then(([kpiData, teamsData, tasksData, alertsData]) => {
+      .then(([kpiData, teamsData, tasksData, alertsData, loanData]) => {
         setKpi(kpiData);
         setTeams(teamsData);
-        setTasksByTeam(groupTasksByTeam(tasksData));
+        setRawTasks(tasksData);
         setAlerts(alertsData);
+        setLoanSummary(loanData);
+        setLastRefresh(new Date());
+        setJustRefreshed(true);
+        setTimeout(() => setJustRefreshed(false), 800);
+      })
+      .catch(err => console.warn('[auto-refresh] failed:', err.message));
+  }, []);
+
+  // Initial data load — uses saved targets from settingsRef so the first render
+  // reflects any user-configured SLA targets, not hardcoded defaults.
+  // history is decoupled (slow cold-scan) and won't block KPI/teams.
+  useEffect(() => {
+    if (!authed) { setLoading(false); return; }
+    // Read targets from ref — already initialised with the lazy-loaded settings
+    // value so this is always the persisted user config, never the bare default.
+    const targets = settingsRef.current?.targets || {};
+    Promise.all([
+      getKpiSummary(targets),
+      getTeams(targets),
+      getTasks(),
+      getAlerts(targets),
+      getLoanSummary(),
+    ])
+      .then(([kpiData, teamsData, tasksData, alertsData, loanData]) => {
+        setKpi(kpiData);
+        setTeams(teamsData);
+        setRawTasks(tasksData);
+        setAlerts(alertsData);
+        setLoanSummary(loanData);
         setLastRefresh(new Date());
         setJustRefreshed(true);
         setTimeout(() => setJustRefreshed(false), 800);
         setLoading(false);
         // Load history separately — won't block dashboard if slow or fails
-        getHistory('90d')
+        getHistory('90d', targets)
           .then(historyData => setHistory(normalizeHistory(historyData, teamsData)))
           .catch(err => console.warn('[history] failed to load:', err.message));
       })
@@ -159,18 +257,79 @@ export default function App() {
         setError('Could not connect to backend. Make sure the server is running on port 5000.');
         setLoading(false);
       });
-  }, []);
+  }, [authed]);
+
+  // Auto-refresh every settings.refreshMin minutes (non-disruptive — no page reload)
+  useEffect(() => {
+    const ms = (settings.refreshMin || 5) * 60 * 1000;
+    const t  = setInterval(refreshData, ms);
+    return () => clearInterval(t);
+  }, [settings.refreshMin, refreshData]);
 
   const toggleDim    = useCallback(id => setDimmed(prev => {
     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
   }), []);
   const dismissAlert  = useCallback(id => setAlerts(prev => prev.filter(a => a.id !== id)), []);
   const closeModal    = useCallback(() => setModalTeamId(null), []);
-  const changeSettings = useCallback((key, val) => setSettings(prev => ({ ...prev, [key]: val })), []);
+  const openLoanModal = useCallback((type, label) => {
+    setLoanModal({ type, label });
+    setLoanDetail({ data: [], loading: true, error: null });
+    getLoanDetail(type)
+      .then(data => setLoanDetail({ data, loading: false, error: null }))
+      .catch(err  => setLoanDetail({ data: [], loading: false, error: err.message }));
+  }, []);
+  const closeLoanModal = useCallback(() => setLoanModal(null), []);
+  const applySettings = useCallback((newSettings) => {
+    try { localStorage.setItem('sla_dash_settings', JSON.stringify(newSettings)); } catch {}
+    // Update ref BEFORE setSettings so refreshData reads the new targets immediately
+    settingsRef.current = newSettings;
+    setSettings(newSettings);
+    // Immediately re-fetch all SLA-affected data with the new targets
+    const targets = newSettings.targets || {};
+    Promise.all([
+      getKpiSummary(targets),
+      getTeams(targets),
+      getTasks(),
+      getAlerts(targets),
+      getLoanSummary(),
+    ]).then(([kpiData, teamsData, tasksData, alertsData, loanData]) => {
+      setKpi(kpiData);
+      setTeams(teamsData);
+      setRawTasks(tasksData);
+      setAlerts(alertsData);
+      setLoanSummary(loanData);
+      setLastRefresh(new Date());
+    }).catch(err => console.warn('[settings refresh] failed:', err.message));
+    // Refresh history with new targets (uses warm cache for non-custom, fresh for custom)
+    getHistory('90d', targets)
+      .then(historyData => setHistory(normalizeHistory(historyData, teamsRef.current)))
+      .catch(err => console.warn('[settings history refresh] failed:', err.message));
+  }, []);
+  const resetSettings = useCallback(() => {
+    // Clear persisted settings first; the safety-net useEffect([settings]) will
+    // then write DEFAULT_SETTINGS back, which is identical to having no entry.
+    try { localStorage.removeItem('sla_dash_settings'); } catch {}
+    settingsRef.current = DEFAULT_SETTINGS;
+    setSettings(DEFAULT_SETTINGS);
+  }, []);
 
   const { dayLabels, trendData }  = useMemo(() => build7DayTrend(history), [history]);
   const availableMonths           = useMemo(() => getAvailableMonthsFromHistory(history), [history]);
-  const modalTeam  = teams.find(t => t.id === modalTeamId) ?? null;
+  // Settings-aware derived state — recomputes automatically when settings or raw data changes
+  const tasksByTeam  = useMemo(() => groupTasksByTeam(rawTasks, settings), [rawTasks, settings]);
+  const teamsDisplay = useMemo(() => teams.map(team => {
+    const customTarget = settings.targets[team.id];
+    if (!customTarget) return team;
+    const teamTasks = tasksByTeam[team.id] || [];
+    // Only recalculate overdue count using the custom target.
+    // SLA% always comes from the backend (DateCompleted-based) and is never overridden client-side.
+    const overdue = teamTasks.filter(t => {
+      const task = rawTasks.find(r => r.TaskID === t.TaskID);
+      return task && task.TotalHoursOnTask > customTarget;
+    }).length;
+    return { ...team, target: customTarget, overdue };
+  }), [teams, tasksByTeam, rawTasks, settings.targets]);
+  const modalTeam  = teamsDisplay.find(t => t.id === modalTeamId) ?? null;
   const modalTasks = modalTeam ? (tasksByTeam[modalTeam.id] || []).slice(0, settings.modalTaskCount) : [];
 
   // AEST time strings
@@ -222,6 +381,18 @@ export default function App() {
 
         <div className="sidebar-spacer"/>
 
+        <button className={`nav-item ${view === 'staff-list' ? 'active' : ''}`}
+          title="Staff List" onClick={() => setView('staff-list')}>
+          <Icon name="staff-list" size={20}/>
+        </button>
+
+        {userRole === 'admin' && (
+          <button className={`nav-item ${view === 'admin' ? 'active' : ''}`}
+            title="User Management" onClick={() => setView('admin')}>
+            <Icon name="user-shield" size={20}/>
+          </button>
+        )}
+
         <button className={`nav-item ${view === 'settings' ? 'active' : ''}`}
           title="Settings" onClick={() => setView('settings')}>
           <Icon name="settings" size={20}/>
@@ -269,21 +440,56 @@ export default function App() {
         {view === 'dashboard' && (
           <main className="content">
 
+            {/* Loan summary strip */}
+            <section className="loan-strip">
+              <LoanKpiTile
+                label="Application Received"
+                count={loanSummary.received.count}
+                amount={loanSummary.received.amount}
+                countDelta={loanSummary.received.deltas.count}
+                amtDelta={loanSummary.received.deltas.amount}
+                target={settings.loanTargets?.received ?? 10}
+                onClick={() => openLoanModal('received', 'Application Received')}
+              />
+              <LoanKpiTile
+                label="Funder Approvals"
+                count={loanSummary.approved.count}
+                amount={loanSummary.approved.amount}
+                countDelta={loanSummary.approved.deltas.count}
+                amtDelta={loanSummary.approved.deltas.amount}
+                target={settings.loanTargets?.approved ?? 10}
+                onClick={() => openLoanModal('approved', 'Funder Approvals')}
+              />
+              <LoanKpiTile
+                label="Settlements"
+                count={loanSummary.settled.count}
+                amount={loanSummary.settled.amount}
+                countDelta={loanSummary.settled.deltas.count}
+                amtDelta={loanSummary.settled.deltas.amount}
+                target={settings.loanTargets?.settled ?? 10}
+                onClick={() => openLoanModal('settled', 'Settlements')}
+              />
+            </section>
+
             {/* KPI strip */}
             <section className="kpi-strip">
               <KpiTile label="Total Active Tasks"  value={kpi.totalTasks}   icon="tasks-sm"
+                tooltip={TOOLTIPS.kpi.totalTasks} tooltipWidth={270}
                 delta={fmtDelta(kpi.deltas.totalTasks)}
                 deltaDir={kpi.deltas.totalTasks > 0 ? 'up' : kpi.deltas.totalTasks < 0 ? 'down' : null}
                 accent={null}/>
               <KpiTile label="Overall SLA %"       value={kpi.overallSla.toFixed(2)}   unit="%" icon="pct"
+                tooltip={TOOLTIPS.kpi.overallSla} tooltipWidth={300}
                 delta={fmtDelta(kpi.deltas.overallSla, '%')}
                 deltaDir={kpi.deltas.overallSla > 0 ? 'up' : kpi.deltas.overallSla < 0 ? 'down' : null}/>
               <KpiTile label="Avg Turnaround"
-                value={kpi.avgTat >= 24 ? Math.round((kpi.avgTat / 24) * 10) / 10 : kpi.avgTat}
-                unit={kpi.avgTat >= 24 ? ' day/s' : ' hour/s'} icon="clock"
-                delta={fmtDelta(kpi.deltas.avgTat, 'h')}
+                value={fmtHMS(kpi.avgTat)}
+                icon="clock"
+                tooltip={TOOLTIPS.kpi.avgTat} tooltipWidth={260}
+                delta={kpi.deltas.avgTat != null && kpi.deltas.avgTat !== 0 ? `${kpi.deltas.avgTat > 0 ? '+' : '-'}${fmtHMS(kpi.deltas.avgTat)}` : '—'}
                 deltaDir={kpi.deltas.avgTat > 0 ? 'up' : kpi.deltas.avgTat < 0 ? 'down' : null}/>
               <KpiTile label="Overdue / Breached"  value={kpi.totalOverdue} icon="hourglass"
+                tooltip={TOOLTIPS.kpi.totalOverdue} tooltipWidth={270}
                 delta={fmtDelta(kpi.deltas.totalOverdue)}
                 deltaDir={kpi.deltas.totalOverdue > 0 ? 'up' : kpi.deltas.totalOverdue < 0 ? 'down' : null}
                 accent="bad"/>
@@ -297,12 +503,14 @@ export default function App() {
                   <span className="section-sub">{teams.length} operational teams &middot; click any card to drill in</span>
                 </div>
                 <div className="team-grid">
-                  {teams.map(t => (
+                  {teamsDisplay.map(t => (
                     <TeamCard key={t.id} team={t} onClick={() => setModalTeamId(t.id)}/>
                   ))}
                 </div>
               </div>
-              <AlertsPanel alerts={alerts} onDismiss={dismissAlert}/>
+              <AlertsPanel alerts={alerts} onDismiss={dismissAlert}
+                atRiskPct={settings.atRiskPct} maxTasks={settings.modalTaskCount}
+                customTargets={settings.targets}/>
             </section>
 
             {/* Trend chart */}
@@ -310,13 +518,14 @@ export default function App() {
               <section className="trend-card">
                 <div className="trend-head">
                   <div>
-                    <h2 className="section-title">7-Day SLA Compliance Trend</h2>
+                    <h2 className="section-title">7-Day SLA Compliance Trend<InfoTip text={TOOLTIPS.chart.trend} width={280}/></h2>
                     <div className="section-sub">Rolling SLA % per team &middot; hover for detail</div>
                   </div>
                   <div className="chart-legend">
-                    {activeTeams(teams, trendData).map(t => (
+                    {activeTeams(teamsDisplay, trendData).map(t => (
                       <span key={t.id}
                         className={`legend-item ${dimmedTeams.has(t.id) ? 'dim' : ''}`}
+                        title="Click to show or hide this team's trend line"
                         onClick={() => toggleDim(t.id)}>
                         <span className="legend-swatch" style={{ background: TEAM_COLORS[t.name] }}/>
                         {t.name}
@@ -325,7 +534,7 @@ export default function App() {
                   </div>
                 </div>
                 <TrendChart
-                  teams={teams}
+                  teams={teamsDisplay}
                   trendData={trendData}
                   dimmed={dimmedTeams}
                   onLegendClick={toggleDim}
@@ -337,11 +546,11 @@ export default function App() {
         )}
 
         {/* â”€â”€ Secondary views (each manages its own <main className="content">) â”€â”€ */}
-        {view === 'teams'   && <TeamsView teams={teams} onOpenTeam={setModalTeamId}/>}
-        {view === 'tasks'   && <TasksView teams={teams} tasks={tasksByTeam}/>}
+        {view === 'teams'   && <TeamsView teams={teamsDisplay} onOpenTeam={setModalTeamId}/>}
+        {view === 'tasks'   && <TasksView teams={teamsDisplay} tasks={tasksByTeam}/>}
         {view === 'reports' && (
           <ReportsView
-            teams={teams}
+            teams={teamsDisplay}
             history={history}
             availableMonths={availableMonths}
             dimmedTeams={dimmedTeams}
@@ -349,12 +558,25 @@ export default function App() {
           />
         )}
         {view === 'alerts'   && <AlertsView  alerts={alerts} onDismiss={dismissAlert}/>}
-        {view === 'settings' && <SettingsView teams={teams} settings={settings} onChange={changeSettings}/>}
+        {view === 'settings' && <SettingsView teams={teams} settings={settings} onApply={applySettings} onReset={resetSettings}/>}
+        {view === 'staff-list' && <StaffListView />}
+        {view === 'admin' && userRole === 'admin' && <AdminView />}
       </div>
 
       {/* Task drill-down modal */}
       {modalTeam && (
-        <TaskModal team={modalTeam} tasks={modalTasks} onClose={closeModal}/>
+        <TaskModal team={modalTeam} tasks={modalTasks} onClose={closeModal} maxTasks={settings.modalTaskCount}/>
+      )}
+
+      {/* Loan drill-down modal */}
+      {loanModal && (
+        <LoanModal
+          label={loanModal.label}
+          loans={loanDetail.data}
+          loading={loanDetail.loading}
+          error={loanDetail.error}
+          onClose={closeLoanModal}
+        />
       )}
     </div>
   );
