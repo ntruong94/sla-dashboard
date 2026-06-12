@@ -346,6 +346,7 @@ const app = express();
 // CORS locked to production frontend only (CLAUDE.md Rule 5)
 const ALLOWED_ORIGINS = [
   'https://sla.mezy.com.au',
+  'https://sla-dashboard.vercel.app',
   'http://localhost:5173',
   'http://localhost:5174',
 ];
