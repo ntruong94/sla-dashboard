@@ -349,6 +349,7 @@ const ALLOWED_ORIGINS = [
   'https://sla-dashboard.vercel.app',
   'http://localhost:5173',
   'http://localhost:5174',
+  'https://balmy-accurate-handpick.ngrok-free.dev',
 ];
 app.use(cors({
   origin: (origin, cb) => {
