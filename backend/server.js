@@ -347,6 +347,7 @@ const app = express();
 const ALLOWED_ORIGINS = [
   'https://sla.mezy.com.au',
   'https://sla-dashboard.vercel.app',
+  'https://sla-dashboard-git-main-mezyproject2026.vercel.app',
   'http://localhost:5173',
   'http://localhost:5174',
   'https://balmy-accurate-handpick.ngrok-free.dev',
