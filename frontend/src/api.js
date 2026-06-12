@@ -2,9 +2,11 @@ const BASE = import.meta.env.VITE_API_BASE || '';
 
 function getToken() { return localStorage.getItem('sla_token') || ''; }
 
+const EXTRA_HEADERS = import.meta.env.VITE_API_BASE?.includes('ngrok') ? { 'ngrok-skip-browser-warning': 'true' } : {};
+
 async function request(path) {
   const res = await fetch(BASE + path, {
-    headers: { 'Authorization': `Bearer ${getToken()}` },
+    headers: { 'Authorization': `Bearer ${getToken()}`, ...EXTRA_HEADERS },
   });
   if (res.status === 401) {
     localStorage.removeItem('sla_token');
@@ -19,7 +21,7 @@ async function request(path) {
 export async function authLogin(email, password) {
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...EXTRA_HEADERS },
     body: JSON.stringify({ email, password }),
   });
   const data = await res.json();
@@ -30,7 +32,7 @@ export async function authLogin(email, password) {
 export async function authForgotPassword(email) {
   const res = await fetch(`${BASE}/api/auth/forgot-password`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...EXTRA_HEADERS },
     body: JSON.stringify({ email }),
   });
   const data = await res.json();
@@ -41,7 +43,7 @@ export async function authForgotPassword(email) {
 export async function authResetPassword(token, password) {
   const res = await fetch(`${BASE}/api/auth/reset-password`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...EXTRA_HEADERS },
     body: JSON.stringify({ token, password }),
   });
   const data = await res.json();
@@ -52,7 +54,7 @@ export async function authResetPassword(token, password) {
 export async function authSignup(email, password, companyName) {
   const res = await fetch(`${BASE}/api/auth/signup`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...EXTRA_HEADERS },
     body: JSON.stringify({ email, password, companyName }),
   });
   const data = await res.json();
@@ -87,7 +89,7 @@ export const getLoanDetail  = (type)          => request(`/api/loan-detail/${typ
 async function postAction(path) {
   const res = await fetch(BASE + path, {
     method: 'POST',
-    headers: { 'Authorization': `Bearer ${getToken()}` },
+    headers: { 'Authorization': `Bearer ${getToken()}`, ...EXTRA_HEADERS },
   });
   if (res.status === 401) {
     localStorage.removeItem('sla_token');
