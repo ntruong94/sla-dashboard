@@ -627,6 +627,17 @@ SLA Dashboard/
 ### Tooltip Rule (2026-06-09)
 - All shared tooltip text lives in `frontend/src/constants.js` → `TOOLTIPS` object, keyed by section (`kpi`, `team`, `chart`, `teams`, `modal`).
 - Settings-specific tooltip text (Refresh interval, At Risk threshold, Tasks in drill-down) lives inline in `views.jsx`.
+
+#### Tooltip Z-Index / Stacking Rule (2026-06-15 — MANDATORY)
+
+> **Every tooltip bubble must always render in front of all other dashboard content — cards, charts, tables, modals, sidebar, and topbar. It must never be clipped, hidden behind containers, or cut off by `overflow: hidden`.**
+
+- **`InfoTip` (ⓘ icon tooltip):** Uses `ReactDOM.createPortal(bubble, document.body)` so the bubble is a direct child of `<body>`, outside any clipping ancestor. The bubble has `position: fixed; z-index: 9999`. This is already correct — do not change it.
+- **Chart hover tooltip (`.tooltip` class in `trend.jsx` and `history-chart.jsx`):** Rendered via `ReactDOM.createPortal(..., document.body)` with `position: 'fixed'` and `zIndex: 9998` in the inline style. The fixed pixel position is computed from `wrapRef.current.getBoundingClientRect()` so the tooltip appears at the correct viewport location regardless of scroll position or ancestor overflow rules. The guard `wrapRef.current &&` ensures the ref is available before computing.
+- **Why portaling is required:** `.trend-card`, `.kpi`, `.card`, and `.alerts-panel` all have `overflow: hidden; isolation: isolate` in the CSS. Any `position: absolute` child (including chart hover tooltips) is clipped at the card boundary. Portaling moves the DOM node to `<body>` so it is never clipped.
+- **Z-index hierarchy:** `InfoTip` bubble = 9999 · chart hover tooltip = 9998 · modal overlay = 100 · sidebar = 10 · topbar = 9.
+- **Any new tooltip added in future** must follow the same portal pattern — never use `position: absolute` inside an `overflow: hidden` ancestor.
+
 - **Formatting requirements for all tooltips:**
   - Use `\n` line breaks to separate sections and bullet points.
   - Use `- ` prefix for bullet lists. `white-space: pre-line` on the bubble renders them correctly.

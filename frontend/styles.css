@@ -835,7 +835,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   transform: translate(-50%, -100%) translateY(-10px);
   box-shadow: var(--shadow-3);
   min-width: 140px;
-  z-index: 2;
+  z-index: 9998;
   opacity: 0;
   transition: opacity .1s;
 }

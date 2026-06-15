@@ -1,4 +1,5 @@
 import React from 'react';
+import ReactDOM from 'react-dom';
 import { TEAM_COLORS } from '../constants.js';
 import { activeTeams, fmtAxisLabel, fmtTooltipDate, buildSmoothPath, computePctAxis } from '../chartUtils.js';
 
@@ -124,10 +125,14 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
         )}
       </svg>
 
-      {hoverIdx !== null && (() => {
-        const leftPct = (xAt(hoverIdx) / W) * 100;
+      {hoverIdx !== null && wrapRef.current && ReactDOM.createPortal((() => {
+        // Portal renders into document.body with position:fixed so the tooltip
+        // escapes any ancestor overflow:hidden / isolation:isolate containers.
+        const rect = wrapRef.current.getBoundingClientRect();
+        const fixedLeft = rect.left + (xAt(hoverIdx) / W) * rect.width;
+        const fixedTop  = rect.top  + 0.12 * rect.height;
         return (
-          <div className="tooltip show" style={{ left: `${leftPct}%`, top: '12%' }}>
+          <div className="tooltip show" style={{ position: 'fixed', left: fixedLeft, top: fixedTop, zIndex: 9998 }}>
             <div className="tooltip-head">{fmtTooltip(dates[hoverIdx])}</div>
             {visibleTeams.filter(t => !dimmed.has(t.id))
               .sort((a, b) => (slice.byTeam[b.id][hoverIdx] ?? 0) - (slice.byTeam[a.id][hoverIdx] ?? 0))
@@ -143,7 +148,7 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
               })}
           </div>
         );
-      })()}
+      })(), document.body)}
     </div>
   );
 };
