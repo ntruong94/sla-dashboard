@@ -1,6 +1,6 @@
 import React from 'react';
 import { TEAM_COLORS } from '../constants.js';
-import { activeTeams, buildSmoothPath } from '../chartUtils.js';
+import { activeTeams, buildSmoothPath, computePctAxis } from '../chartUtils.js';
 
 // 7-day trend chart — SVG multi-line with smooth curves and hollow dots
 
@@ -10,13 +10,23 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
   const innerW = W - pad.left - pad.right;
   const innerH = H - pad.top - pad.bottom;
 
-  const yMin = 60, yMax = 100;
-  const xStep = innerW / Math.max(dayLabels.length - 1, 1);
+  // Only render/show teams that have at least one valid data point
+  const visibleTeams = activeTeams(teams, trendData);
 
+  // Auto-scale Y-axis based on visible (non-dimmed) series; fall back to all
+  // visible series if every team is dimmed so the chart still renders correctly.
+  const seriesForAxis = visibleTeams.filter(t => !dimmed.has(t.id));
+  const axisTeams = seriesForAxis.length > 0 ? seriesForAxis : visibleTeams;
+  const allVals = axisTeams.flatMap(t => trendData[t.id] || []);
+  const { yMin, yMax, ticks: gridY } = computePctAxis(allVals);
+
+  const xStep = innerW / Math.max(dayLabels.length - 1, 1);
   const xAt = (i) => pad.left + i * xStep;
   const yAt = (v) => pad.top + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
 
-  const gridY = [60, 70, 80, 90, 100];
+  // Unique clipPath id so the chart never bleeds outside the plot area,
+  // even when multiple charts are mounted on the same page.
+  const clipId = 'trend-clip-' + React.useId().replace(/:/g, '');
 
   const [hoverIdx, setHoverIdx] = React.useState(null);
   const wrapRef = React.useRef(null);
@@ -29,11 +39,14 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
     setHoverIdx(i >= 0 && i < dayLabels.length ? i : null);
   };
 
-  // Only render/show teams that have at least one valid data point
-  const visibleTeams = activeTeams(teams, trendData);
   if (visibleTeams.length === 0) return <div style={{padding:40,textAlign:'center',color:'var(--ink-muted)'}}>No trend data available.</div>;
 
   const smoothPath = (arr) => buildSmoothPath(arr, xAt, yAt);
+
+  // Target band 90–100 — only show where it intersects the visible range
+  const bandLo = Math.max(yMin, 90);
+  const bandHi = Math.min(yMax, 100);
+  const showTargetBand = bandHi > bandLo;
 
   const textProps = {
     fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
@@ -47,6 +60,13 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
     <div className="chart-wrap" ref={wrapRef}
       onMouseMove={handleMove} onMouseLeave={() => setHoverIdx(null)}>
       <svg viewBox={`0 0 ${W} ${H}`} textRendering="geometricPrecision">
+        <defs>
+          {/* Clip rect locks all data graphics to the inner plot area so
+              lines, dots and the target band can never overflow the chart. */}
+          <clipPath id={clipId}>
+            <rect x={pad.left} y={pad.top} width={innerW} height={innerH} />
+          </clipPath>
+        </defs>
 
         {/* Soft horizontal gridlines */}
         {gridY.map(v => (
@@ -56,7 +76,7 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
               y1={yAt(v)} y2={yAt(v)}
               stroke="rgba(0,0,0,0.07)"
               strokeWidth="1"
-              strokeDasharray={v === 60 ? '0' : '3 5'}
+              strokeDasharray={v === yMin ? '0' : '3 5'}
             />
             <text x={pad.left - 12} y={yAt(v) + 4} textAnchor="end"
               {...textProps} style={{ fontVariantNumeric: 'tabular-nums' }}>
@@ -72,14 +92,18 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
           </text>
         ))}
 
-        {/* Subtle green target band 90–100 */}
-        <rect
-          x={pad.left} y={yAt(100)}
-          width={innerW} height={yAt(90) - yAt(100)}
-          fill="var(--ok)" opacity="0.04"
-        />
+        {/* Subtle green target band 90–100 (clipped to plot area) */}
+        {showTargetBand && (
+          <rect
+            x={pad.left} y={yAt(bandHi)}
+            width={innerW} height={yAt(bandLo) - yAt(bandHi)}
+            fill="var(--ok)" opacity="0.04"
+            clipPath={`url(#${clipId})`}
+          />
+        )}
 
-        {/* Smooth lines + hollow dots */}
+        {/* Smooth lines + hollow dots — clipped to the inner plot area */}
+        <g clipPath={`url(#${clipId})`}>
         {visibleTeams.map(t => {
           const arr = trendData[t.id];
           if (!arr) return null;
@@ -97,6 +121,9 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
               />
               {arr.map((v, i) => {
                 if (v == null || Number.isNaN(v)) return null;
+                // Skip dots that fall outside the visible Y-range so they
+                // don't get partially clipped at the chart edge.
+                if (v < yMin || v > yMax) return null;
                 return (
                   <circle
                     key={i}
@@ -111,6 +138,7 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
             </g>
           );
         })}
+        </g>
 
         {/* Hover crosshair */}
         {hoverIdx !== null && (

@@ -1,6 +1,6 @@
 import React from 'react';
 import { TEAM_COLORS } from '../constants.js';
-import { activeTeams, fmtAxisLabel, fmtTooltipDate, buildSmoothPath } from '../chartUtils.js';
+import { activeTeams, fmtAxisLabel, fmtTooltipDate, buildSmoothPath, computePctAxis } from '../chartUtils.js';
 
 // New chart that adapts to date range (7d / 30d / 90d / calendar month)
 // Renders dates dynamically — smart x-axis tick density based on range length.
@@ -19,11 +19,19 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
   const visibleTeams = activeTeams(teams, slice.byTeam);
   if (visibleTeams.length === 0) return <div style={{padding:40,textAlign:'center',color:'var(--ink-muted)'}}>No data in this range.</div>;
 
-  const yMin = 55, yMax = 100;
+  // Auto-scale Y-axis based on currently undimmed series so the chart adapts
+  // when the user toggles teams off in the legend.
+  const seriesForAxis = visibleTeams.filter(t => !dimmed.has(t.id));
+  const axisTeams = seriesForAxis.length > 0 ? seriesForAxis : visibleTeams;
+  const allVals = axisTeams.flatMap(t => slice.byTeam[t.id] || []);
+  const { yMin, yMax, ticks: gridY } = computePctAxis(allVals, { fallbackMin: 55 });
+
   const xStep = n > 1 ? innerW / (n - 1) : 0;
   const xAt = (i) => pad.left + i * xStep;
   const yAt = (v) => pad.top + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
-  const gridY = [60, 70, 80, 90, 100];
+
+  // Unique clipPath id — prevents collision when multiple charts mount.
+  const clipId = 'history-clip-' + React.useId().replace(/:/g, '');
 
   const [hoverIdx, setHoverIdx] = React.useState(null);
   const wrapRef = React.useRef(null);
@@ -53,6 +61,14 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
     <div className="chart-wrap" ref={wrapRef}
       onMouseMove={handleMove} onMouseLeave={() => setHoverIdx(null)}>
       <svg viewBox={`0 0 ${W} ${H}`} textRendering="geometricPrecision">
+        <defs>
+          {/* Clip rect locks all data graphics to the inner plot area so
+              lines and dots can never overflow the chart edges. */}
+          <clipPath id={clipId}>
+            <rect x={pad.left} y={pad.top} width={innerW} height={innerH} />
+          </clipPath>
+        </defs>
+
         {gridY.map(v => (
           <g key={v}>
             <line x1={pad.left} x2={W - pad.right} y1={yAt(v)} y2={yAt(v)}
@@ -72,6 +88,7 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
             fill="var(--ink-muted)">{fmtAxisLabel(dates[i], n)}</text>
         ))}
 
+        <g clipPath={`url(#${clipId})`}>
         {visibleTeams.map(t => {
           const arr = slice.byTeam[t.id];
           if (!arr) return null;
@@ -83,6 +100,7 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
                 strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               {showDots && arr.map((v, i) => {
                 if (v == null || Number.isNaN(v)) return null;
+                if (v < yMin || v > yMax) return null;
                 return (
                   <circle key={i} cx={xAt(i)} cy={yAt(v)}
                     r={hoverIdx === i ? 5 : 3}
@@ -90,13 +108,15 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
                     strokeWidth={hoverIdx === i ? 2.5 : 2}/>
                 );
               })}
-              {!showDots && hoverIdx !== null && arr[hoverIdx] != null && (
+              {!showDots && hoverIdx !== null && arr[hoverIdx] != null
+                && arr[hoverIdx] >= yMin && arr[hoverIdx] <= yMax && (
                 <circle cx={xAt(hoverIdx)} cy={yAt(arr[hoverIdx])}
                   r="5" fill="white" stroke={color} strokeWidth="2.5"/>
               )}
             </g>
           );
         })}
+        </g>
 
         {hoverIdx !== null && (
           <line x1={xAt(hoverIdx)} x2={xAt(hoverIdx)} y1={pad.top} y2={H - pad.bottom}

@@ -612,6 +612,18 @@ SLA Dashboard/
 - `components/components.jsx`, `views.jsx`, `history-chart.jsx`, `trend.jsx`, `icons.jsx` are production-quality and stable.
 - Make targeted additions only; do not refactor structure unless explicitly asked.
 
+### Chart Rendering Rules (2026-06-15)
+
+> **Applies to all SVG charts in the dashboard** — currently `TrendChart` (`trend.jsx`) and `HistoryChart` (`history-chart.jsx`). Any future chart MUST follow these rules.
+
+- **Auto-scale Y-axis from the visible data, never hardcode `yMin/yMax` or `gridY` arrays.** Use `computePctAxis(values, opts)` from `chartUtils.js` — it returns `{ yMin, yMax, ticks }` with sensible padding (~10%, min 5pp), nice rounded tick steps (1/2/5/10/20/25), and clamps to `[0, 100]` for percentages. Falls back to `[60, 100]` when no data.
+- **Y-axis must react to legend toggles.** Pass only undimmed series into `computePctAxis()` so the chart re-fits when teams are filtered out. Fall back to all visible teams if every series is dimmed.
+- **Clip every data graphic to the inner plot area.** Add `<defs><clipPath id={uniqueId}><rect x={pad.left} y={pad.top} width={innerW} height={innerH}/></clipPath></defs>` and wrap the series `<g>` (and any target band rect) with `clipPath={`url(#${uniqueId})`}`. The id must be unique per chart instance — use `React.useId()` (strip colons for valid SVG ids) so multiple charts on one page do not collide.
+- **Skip dots whose value falls outside `[yMin, yMax]`** rather than rendering them at the clipped edge — prevents half-circles glued to the chart border.
+- **Target/threshold bands must be clipped too** and only drawn where the band intersects the visible Y range (`bandLo = max(yMin, target)`, `bandHi = min(yMax, ceiling)`; render only when `bandHi > bandLo`).
+- **Do NOT change chart types or styling.** No new chart libraries. No restyle of colors, strokes, or fonts. These changes are limited to axis math and overflow control.
+- **Do NOT change business logic upstream.** Auto-scaling is purely a presentation concern — the underlying SLA% values, weekend filtering (`filterBizDays`), null-handling (`buildSmoothPath`), and `activeTeams` selection are unchanged.
+
 ### Tooltip Rule (2026-06-09)
 - All shared tooltip text lives in `frontend/src/constants.js` → `TOOLTIPS` object, keyed by section (`kpi`, `team`, `chart`, `teams`, `modal`).
 - Settings-specific tooltip text (Refresh interval, At Risk threshold, Tasks in drill-down) lives inline in `views.jsx`.

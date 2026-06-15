@@ -59,6 +59,81 @@ export function fmtTooltipDate(date) {
   });
 }
 
+// ── Auto-scaling Y-axis for percentage charts ────────────────────────────────
+//
+// Computes a tight, readable Y-axis for percentage data:
+//   - Range derived from the visible series (min/max of all valid values).
+//   - Padded by ~10% of the data span (or 5pp minimum) so points/lines never
+//     touch the chart edge.
+//   - Snapped to a "nice" step (1/2/5/10/20/25) so gridlines fall on round %.
+//   - Always clamped to [0, 100] — percentages can never exceed those bounds.
+//   - Falls back to [60, 100] when no valid data is present.
+//
+// Returns: { yMin, yMax, ticks: number[] } — ticks include both endpoints.
+export function computePctAxis(allValues, opts = {}) {
+  const { fallbackMin = 60, fallbackMax = 100, targetTicks = 5, minSpan = 10 } = opts;
+  const nums = (allValues || []).filter(v => v != null && !Number.isNaN(v) && Number.isFinite(v));
+  if (nums.length === 0) {
+    return { yMin: fallbackMin, yMax: fallbackMax, ticks: niceTicks(fallbackMin, fallbackMax, targetTicks) };
+  }
+
+  let lo = Math.min(...nums);
+  let hi = Math.max(...nums);
+
+  // Ensure a visible band even when data is flat
+  if (hi - lo < minSpan) {
+    const mid = (hi + lo) / 2;
+    lo = mid - minSpan / 2;
+    hi = mid + minSpan / 2;
+  }
+
+  // Add ~10% padding on each side of the data range
+  const span = hi - lo;
+  const pad = Math.max(span * 0.1, 2);
+  lo -= pad;
+  hi += pad;
+
+  // Snap to a nice step so gridlines land on round numbers
+  const step = niceStep((hi - lo) / targetTicks);
+  let yMin = Math.floor(lo / step) * step;
+  let yMax = Math.ceil(hi / step) * step;
+
+  // Clamp to percentage bounds
+  yMin = Math.max(0, yMin);
+  yMax = Math.min(100, yMax);
+  if (yMax - yMin < step) yMax = Math.min(100, yMin + step);
+
+  return { yMin, yMax, ticks: niceTicks(yMin, yMax, targetTicks, step) };
+}
+
+// Pick a "nice" tick step from a rough target step value.
+function niceStep(rough) {
+  if (rough <= 0 || !Number.isFinite(rough)) return 10;
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / pow; // 1..10
+  let nice;
+  if (norm < 1.5) nice = 1;
+  else if (norm < 3) nice = 2;
+  else if (norm < 7) nice = 5;
+  else nice = 10;
+  return nice * pow;
+}
+
+// Build an inclusive tick array for [min, max] at the given step.
+function niceTicks(min, max, target = 5, step) {
+  const s = step ?? niceStep((max - min) / target);
+  const out = [];
+  // Start at the first multiple of s >= min
+  const start = Math.ceil(min / s) * s;
+  for (let v = start; v <= max + 1e-9; v += s) {
+    // Avoid floating-point fuzz like 70.00000000001
+    out.push(Math.round(v * 1e6) / 1e6);
+  }
+  if (out[0] !== min) out.unshift(min);
+  if (out[out.length - 1] !== max) out.push(max);
+  return out;
+}
+
 // ── Null-safe smooth path (Catmull-Rom → cubic bezier) ───────────────────────
 //
 // Splits the series at null/NaN gaps so the line lifts the pen rather than
