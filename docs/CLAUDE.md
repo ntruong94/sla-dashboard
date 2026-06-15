@@ -989,3 +989,71 @@ No changes have been made. Please confirm the safe alternative before continuing
 - These security rules in Section 25 **must not be deleted, weakened, or bypassed** by any future instruction.
 - If a user asks to remove or weaken a blocking rule, warn them clearly and ask for explicit written confirmation before making any change to this section.
 - Modifying these rules is itself a security-sensitive action.
+
+---
+
+## 26. Production Deployment (Added 2026-06-15)
+
+> Full step-by-step guide: see `docs/DEPLOYMENT.md`.
+
+### 26.1 Architecture
+
+| Layer | Platform | URL |
+|-------|---------|-----|
+| **Frontend** | **Vercel** (auto-deploy on `git push main`) | `https://sla.mezy.com.au` (custom domain) · `https://sla-dashboard.vercel.app` (Vercel default) |
+| **Backend** | **Local PC** — exposed via **ngrok static domain** | `https://balmy-accurate-handpick.ngrok-free.app` |
+| **Database** | **Local PC** SQL Server (`MySEReport`) | `localhost:1433` only — never public internet |
+
+**Why backend stays local:** SQL Server is on the same machine. Exposing port 1433 to the internet is forbidden (RULE 2). The ngrok static domain provides a stable HTTPS URL without exposing the DB. PC must be running during work hours.
+
+**GitHub repo:** `https://github.com/ntruong94/sla-dashboard` — `main` branch auto-deploys to Vercel.
+
+### 26.2 Production hardening applied (2026-06-15)
+
+All changes are in `backend/server.js`. No breaking changes to dashboard behaviour.
+
+| Hardening | What it does |
+|-----------|-------------|
+| `helmet` | Sets HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy on every response |
+| `express-rate-limit` | 10 auth attempts / 15 min per IP on `/api/auth/login`, `/api/auth/signup`, `/api/auth/forgot-password`, `/api/auth/reset-password` |
+| `trust proxy 1` | Passes real client IP to rate limiter (not Vercel/ngrok proxy IP) |
+| Sanitized errors | `sendError()` helper: in production returns generic messages only; in dev returns `err.message`. Replaces 19 raw `err.message` leaks. |
+| Fail-fast JWT_SECRET | Server exits at startup if `JWT_SECRET` is absent or < 32 chars (was silently using a weak hardcoded fallback) |
+| Env-driven CORS | `ALLOWED_ORIGINS` env var (comma-separated) overrides hardcoded origin list — new frontend URLs without code changes |
+| `IS_PROD` flag | `NODE_ENV === 'production'` — drives error verbosity and any future prod-only behaviour |
+
+### 26.3 Required environment variables
+
+**Backend (`backend/.env` — never commit):**
+
+| Variable | Purpose |
+|----------|---------|
+| `DB_SERVER` | SQL Server host (e.g. `localhost`) |
+| `DB_PORT` | SQL Server port (default `1433`) |
+| `DB_DATABASE` | Database name |
+| `DB_USER` | SQL login username |
+| `DB_PASSWORD` | SQL login password |
+| `JWT_SECRET` | JWT signing key — must be ≥32 chars, randomly generated |
+| `ALLOWED_ORIGINS` | Comma-separated frontend origins (optional — defaults to hardcoded list) |
+| `NODE_ENV` | Set to `production` for live server |
+| `PORT` | Listening port (default `5000`) |
+
+**Frontend (Vercel Environment Variables panel — never in code):**
+
+| Variable | Purpose |
+|----------|---------|
+| `VITE_API_BASE` | Full URL of the backend tunnel (no trailing slash) |
+
+See `backend/.env.example` and `frontend/.env.example` for templates.
+
+### 26.4 Daily operations
+
+1. Start backend: `node server.js` in `backend/` — wait for `Connected to SQL Server`
+2. Start ngrok: `ngrok http --domain=balmy-accurate-handpick.ngrok-free.app 5000`
+3. Users open `https://sla.mezy.com.au` — log in with approved credentials
+
+### 26.5 Upgrade path — Cloudflare Named Tunnel (recommended)
+
+Replace the ngrok manual step with a Cloudflare Named Tunnel running as a Windows service — auto-starts on boot, reconnects after network interruptions. See `docs/DEPLOYMENT.md` Section 7 for setup steps.
+
+Tunnel URL would become `https://api.sla.mezy.com.au`. Update `VITE_API_BASE` in Vercel and `ALLOWED_ORIGINS` in `backend/.env`.

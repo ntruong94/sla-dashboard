@@ -1,14 +1,29 @@
-﻿const express = require('express');
-const cors    = require('cors');
-const bcrypt  = require('bcryptjs');
-const jwt     = require('jsonwebtoken');
-const crypto  = require('crypto');
+﻿const express   = require('express');
+const cors      = require('cors');
+const helmet    = require('helmet');
+const rateLimit = require('express-rate-limit');
+const bcrypt    = require('bcryptjs');
+const jwt       = require('jsonwebtoken');
+const crypto    = require('crypto');
 require('dotenv').config();
 const { sql, connectDB } = require('./db');
 const mock = require('./mock-data');
 
-// â”€â”€â”€ Team definitions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// All 6 teams are now filtered by Staff.DepartmentId â€” ConfigQueue.QueueId is NOT used.
+// Production / development mode toggle (drives error verbosity)
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// Generic error responder (CLAUDE.md Section 25 RULE 3).
+// In production: return only a generic message; never leak err.message,
+// stack traces, file paths, DB names, or table names.
+// In development: return err.message to aid debugging.
+function sendError(res, status, publicMessage, err) {
+  if (err) console.error(`[error] ${publicMessage}:`, err);
+  if (IS_PROD) return res.status(status).json({ error: publicMessage });
+  return res.status(status).json({ error: err?.message || publicMessage });
+}
+
+// ─── Team definitions ─────────────────────────────────────────────────────────
+// All 6 teams are now filtered by Staff.DepartmentId — ConfigQueue.QueueId is NOT used.
 // Only Staff rows with EmployeeStatus = 1 are used for team identification.
 const TEAMS = [
   { id: 1, name: 'Data Entry',                dept: 'Origination',  target: 4, departmentId: 101 },
@@ -18,14 +33,14 @@ const TEAMS = [
   { id: 5, name: 'Approvals Department',      dept: 'Credit',       target: 4, departmentId: 86  },
   { id: 6, name: 'Settlements Department',    dept: 'Settlement',   target: 4, departmentId: 82  },
 ];
-// All teams use DepartmentId â€” ConfigQueue.QueueId is not used for team filtering.
+// All teams use DepartmentId — ConfigQueue.QueueId is not used for team filtering.
 const DEPT_TEAM_IDS = TEAMS.map(t => t.departmentId); // [101, 128, 10, 122, 86, 82]
 
-// â”€â”€â”€ Date helpers for KPI delta (vs previous business day) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Date helpers for KPI delta (vs previous business day) ───────────────────
 // TODAY_FIXED: override date for testing. Set to null to use real local clock.
-// Set to '2026-05-28' â€” last date with actual task data in the backed-up DB snapshot.
+// Set to '2026-05-28' — last date with actual task data in the backed-up DB snapshot.
 const TODAY_FIXED = null;
-// Returns today's date as YYYY-MM-DD using local clock (not UTC â€” avoids AEST off-by-one)
+// Returns today's date as YYYY-MM-DD using local clock (not UTC — avoids AEST off-by-one)
 function todayLocal() {
   if (TODAY_FIXED) return TODAY_FIXED;
   const d = new Date();
@@ -37,9 +52,9 @@ function todayLocal() {
 function prevBizDay(dateStr) {
   const d   = new Date(dateStr + 'T00:00:00');
   const dow = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  const offset = dow === 1 ? -3 : dow === 0 ? -2 : -1; // Monâ†’Fri, Sunâ†’Fri, else -1
+  const offset = dow === 1 ? -3 : dow === 0 ? -2 : -1; // Mon→Fri, Sun→Fri, else -1
   d.setDate(d.getDate() + offset);
-  // Use local date parts â€” toISOString() would return UTC and lose a day in AEST
+  // Use local date parts — toISOString() would return UTC and lose a day in AEST
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
@@ -60,20 +75,20 @@ function computeDates() {
   return { today, prev, todayNext: nextDay(today), prevNext: nextDay(prev) };
 }
 
-// Build a SQL CASE expression mapping tasks â†’ team id (1â€“6).
+// Build a SQL CASE expression mapping tasks → team id (1–6).
 // All teams use s.DepartmentId via LEFT JOIN Staff (EmployeeStatus=1).
 const TEAM_ID_CASE = TEAMS.map(t =>
   `WHEN s.DepartmentId = ${t.departmentId} THEN ${t.id}`
 ).join(' ');
-// Build a SQL CASE expression mapping tasks â†’ team name string (for /api/tasks).
+// Build a SQL CASE expression mapping tasks → team name string (for /api/tasks).
 const TEAM_NAME_CASE = TEAMS.map(t =>
   `WHEN s.DepartmentId = ${t.departmentId} THEN '${t.name}'`
 ).join(' ');
-// Combined WHERE predicate â€” all 6 teams filtered via Staff.DepartmentId.
+// Combined WHERE predicate — all 6 teams filtered via Staff.DepartmentId.
 // Only active staff (EmployeeStatus=1) are matched.
 const TEAM_FILTER = `s.DepartmentId IN (${DEPT_TEAM_IDS.join(',')}) AND s.EmployeeStatus = 1`;
 
-// â”€â”€â”€ Custom-target helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Custom-target helpers ────────────────────────────────────────────────────
 // Parse ?t1=2&t2=4&t3=4&t4=4&t5=4&t6=4 into { 1: 2.0, 2: 4.0, ... }
 function parseTargets(query) {
   const out = {};
@@ -97,7 +112,7 @@ function buildTargetExpr(customTargets) {
   return `CASE ${cases.join(' ')} ELSE t.SLAInHours END`;
 }
 
-// â”€â”€â”€ TAT SQL expressions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── TAT SQL expressions ──────────────────────────────────────────────────────
 // NOW_SQL: the SQL expression used as "current time" in open-task TAT calculations.
 // When TODAY_FIXED is set (snapshot DB), we use the end of the snapshot day so that
 // TAT is measured within the snapshot day, not against real time weeks later.
@@ -106,10 +121,10 @@ const NOW_SQL = TODAY_FIXED
   ? `CAST('${nextDay(TODAY_FIXED)}' AS DATETIME)`
   : `GETDATE()`;
 
-// Elapsed hours for OPEN (active) tasks â€” real-time: NOW_SQL minus creation time.
+// Elapsed hours for OPEN (active) tasks — real-time: NOW_SQL minus creation time.
 // Use for all overdue / at-risk / avgTat calculations on active tasks.
 const OPEN_TAT_EXPR   = `DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0`;
-// Elapsed hours for CLOSED (completed) tasks â€” DateCompleted minus DateCreated.
+// Elapsed hours for CLOSED (completed) tasks — DateCompleted minus DateCreated.
 // Use for SLA compliance checks and avgTat on completed tasks.
 const CLOSED_TAT_EXPR = `DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0`;
 
@@ -117,7 +132,7 @@ const CLOSED_TAT_EXPR = `DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0
 // Switch to false once SQL Server TCP/IP is enabled (see db-health endpoint).
 const USE_MOCK = false;
 
-// â”€â”€â”€ In-memory response cache â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── In-memory response cache ─────────────────────────────────────────────────
 // Stale-while-revalidate: serve cached data immediately, refresh in background.
 // On first server start (cold DB), the first request waits for the initial fetch.
 // Cache is pre-warmed at startup so users never hit the cold 100+ second scan.
@@ -148,10 +163,10 @@ async function fetchKpiData(customTargets = {}) {
   const targetExpr = buildTargetExpr(customTargets);
 
   // Two parallel queries:
-  // Q1: totalTasks, avgTat, totalOverdue â€” active/all tasks, filtered by DateCreated.
+  // Q1: totalTasks, avgTat, totalOverdue — active/all tasks, filtered by DateCreated.
   //     TAT for open tasks = GETDATE() - DateCreated (real-time elapsed).
   //     TAT for closed tasks = DateCompleted - DateCreated.
-  // Q2: overallSla â€” completed tasks (status=2), filtered by DateCompleted.
+  // Q2: overallSla — completed tasks (status=2), filtered by DateCompleted.
   //     SLA compliance = DATEDIFF(DateCreated, DateCompleted) <= configured target.
   const [mainRes, slaRes] = await Promise.all([
     pool.request().query(`
@@ -194,7 +209,7 @@ async function fetchKpiData(customTargets = {}) {
         AND ${TEAM_FILTER}
         AND t.DateCreated >= '${prev}' AND t.DateCreated < '${todayNext}'
     `),
-    // SLA% uses DateCompleted â€” completed tasks regardless of when they were created.
+    // SLA% uses DateCompleted — completed tasks regardless of when they were created.
     // TAT for closed tasks = DateCompleted - DateCreated (computed, not stored field).
     // targetExpr uses custom per-team target hours when configured, else t.SLAInHours.
     pool.request().query(`
@@ -243,10 +258,10 @@ async function fetchTeamsData(customTargets = {}) {
   const targetExpr = buildTargetExpr(customTargets);
 
   // Three parallel queries:
-  // Q1: volume, avgTat, overdue â€” active/all tasks, DateCreated today.
+  // Q1: volume, avgTat, overdue — active/all tasks, DateCreated today.
   //     TAT for open tasks = GETDATE()-DateCreated; closed = DateCompleted-DateCreated.
-  // Q2: volume/overdue/TAT deltas â€” DateCreated today + prev.
-  // Q3: SLA% per team â€” completed tasks (status=2), DateCompleted today + prev.
+  // Q2: volume/overdue/TAT deltas — DateCreated today + prev.
+  // Q3: SLA% per team — completed tasks (status=2), DateCompleted today + prev.
   //     SLA compliance = DATEDIFF(DateCreated, DateCompleted) <= configured target.
   //     targetExpr uses custom per-team target hours when configured, else t.SLAInHours.
   const [result, delta, slaResult] = await Promise.all([
@@ -274,7 +289,7 @@ async function fetchTeamsData(customTargets = {}) {
         AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
       GROUP BY CASE ${TEAM_ID_CASE} END
     `),
-    // Delta query: volume/overdue/TAT only â€” all date-scoped by DateCreated
+    // Delta query: volume/overdue/TAT only — all date-scoped by DateCreated
     pool.request().query(`
       SELECT
         CASE ${TEAM_ID_CASE} END AS teamId,
@@ -343,8 +358,28 @@ async function fetchTeamsData(customTargets = {}) {
 }
 
 const app = express();
-// CORS locked to production frontend only (CLAUDE.md Rule 5)
-const ALLOWED_ORIGINS = [
+
+// Trust the first proxy hop (Vercel/Cloudflare/ngrok) so rate-limiter and
+// req.ip see the real client IP, not the proxy IP. Required for express-rate-limit
+// when behind a reverse proxy (CLAUDE.md Section 25 RULE 4 spirit).
+app.set('trust proxy', 1);
+
+// Security headers (CLAUDE.md Section 25 RULE 7 spirit). Helmet sets:
+// HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, etc.
+// CSP is left to default-off because the API serves JSON only and is loaded
+// cross-origin by the frontend; tightening CSP here would have no effect.
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
+
+// CORS locked to production frontend only (CLAUDE.md Section 25 RULE 5).
+// Allowed origins come from env var (comma-separated) so adding a new
+// preview/staging domain doesn't require a code change. Falls back to a
+// safe default list for local dev.
+const ENV_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
+const DEFAULT_ORIGINS = [
   'https://sla.mezy.com.au',
   'https://sla-dashboard.vercel.app',
   'https://sla-dashboard-git-main-mezyproject2026.vercel.app',
@@ -352,6 +387,7 @@ const ALLOWED_ORIGINS = [
   'http://localhost:5174',
   'https://balmy-accurate-handpick.ngrok-free.dev',
 ];
+const ALLOWED_ORIGINS = ENV_ORIGINS.length ? ENV_ORIGINS : DEFAULT_ORIGINS;
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
@@ -361,32 +397,48 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// â”€â”€â”€ Root â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Rate limiter for auth endpoints to throttle credential-stuffing /
+// password-spray / token-guessing attacks (CLAUDE.md Section 25 RULE 4 spirit).
+// 10 attempts per IP per 15 min; failed responses count toward the limit.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts. Please try again in 15 minutes.' },
+});
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.send(`SLA Dashboard backend running (mode: ${USE_MOCK ? 'MOCK DATA' : 'LIVE DATABASE'})`);
 });
 
-// â”€â”€â”€ Health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', mode: USE_MOCK ? 'mock' : 'live' });
 });
 
-// â”€â”€â”€ DB health check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── DB health check ──────────────────────────────────────────────────────────
 // Pings the SQL Server with SELECT 1. Use this to verify the connection works.
 app.get('/api/db-health', async (req, res) => {
   if (USE_MOCK) {
-    return res.json({ status: 'OK', mode: 'mock', message: 'Mock mode â€” no DB connection attempted.' });
+    return res.json({ status: 'OK', mode: 'mock', message: 'Mock mode — no DB connection attempted.' });
   }
   try {
     const pool = await connectDB();
     await pool.request().query('SELECT 1 AS ping');
     res.json({ status: 'OK', mode: 'live', message: 'SQL Server connection successful.' });
   } catch (err) {
-    res.status(503).json({ status: 'ERROR', mode: 'live', message: err.message });
+    console.error('[health] DB ping failed:', err);
+    res.status(503).json({
+      status: 'ERROR',
+      mode: 'live',
+      message: IS_PROD ? 'Database connection failed.' : err.message,
+    });
   }
 });
 
-// â”€â”€â”€ DB diagnostic â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── DB diagnostic ────────────────────────────────────────────────────────────
 // Confirms ConfigQueue names, Tasks columns, and task statuses against live DB.
 app.get('/api/db-test', async (req, res) => {
   if (USE_MOCK) {
@@ -421,14 +473,14 @@ app.get('/api/db-test', async (req, res) => {
       taskStatuses: statuses.recordset,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ KPI Summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── KPI Summary ──────────────────────────────────────────────────────────────
 // Returns: { totalTasks, overallSla, avgTat, totalOverdue }
-// - totalTasks        â†’ active tasks (TaskStatusID IN 1,4,5,6)
-// - overallSla, avgTat, totalOverdue â†’ completed tasks only (TaskStatusID = 2)
+// - totalTasks        → active tasks (TaskStatusID IN 1,4,5,6)
+// - overallSla, avgTat, totalOverdue → completed tasks only (TaskStatusID = 2)
 app.get('/api/kpi-summary', async (req, res) => {
   if (USE_MOCK) {
     const active = mock.TASKS.filter(t => t.TaskStatusID === 1);
@@ -448,17 +500,17 @@ app.get('/api/kpi-summary', async (req, res) => {
   try {
     const customTargets = parseTargets(req.query);
     const hasCustom = Object.keys(customTargets).length > 0;
-    // Bypass cache when custom targets are set â€” serve fresh data with the correct thresholds.
+    // Bypass cache when custom targets are set — serve fresh data with the correct thresholds.
     res.json(hasCustom ? await fetchKpiData(customTargets) : await getCached('kpi', fetchKpiData));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Teams â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Teams ────────────────────────────────────────────────────────────────────
 // Returns array: [{ id, name, dept, target, volume, sla, avgTat, overdue }]
 //
-// Tasks are mapped to teams via Staff.DepartmentId (AssignedTo â†’ Staff â†’ DepartmentId).
+// Tasks are mapped to teams via Staff.DepartmentId (AssignedTo → Staff → DepartmentId).
 app.get('/api/teams', async (req, res) => {
   if (USE_MOCK) {
     const active = mock.TASKS.filter(t => t.TaskStatusID === 1);
@@ -489,11 +541,11 @@ app.get('/api/teams', async (req, res) => {
     const hasCustom = Object.keys(customTargets).length > 0;
     res.json(hasCustom ? await fetchTeamsData(customTargets) : await getCached('teams', fetchTeamsData));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Tasks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Tasks ────────────────────────────────────────────────────────────────────
 // Query params: ?team=<QueueId>&status=ok|warn|bad
 // Returns array of task objects matching the mock-data shape.
 app.get('/api/tasks', async (req, res) => {
@@ -511,13 +563,13 @@ app.get('/api/tasks', async (req, res) => {
   try {
     const pool    = await connectDB();
     const request = pool.request();
-    // atRiskFraction: default 87.5%, configurable via ?atRiskPct=N (clamped 50â€“99)
+    // atRiskFraction: default 87.5%, configurable via ?atRiskPct=N (clamped 50–99)
     const atRiskFraction = Math.min(0.99, Math.max(0.50, parseFloat(req.query.atRiskPct || 87.5) / 100));
 
-    // Tasks are mapped to teams via Staff.DepartmentId (AssignedTo â†’ Staff â†’ DepartmentId).
+    // Tasks are mapped to teams via Staff.DepartmentId (AssignedTo → Staff → DepartmentId).
     // SLARemaining comes from TaskRelation (IsCurrent = 1 row).
     // Limited to TOP 500 sorted by worst SLA first to avoid timeout on large datasets.
-    // TaskRelation join removed â€” expensive on large tables; SLARemaining set to NULL.
+    // TaskRelation join removed — expensive on large tables; SLARemaining set to NULL.
     let query = `
       SELECT TOP 500
         t.TaskID,
@@ -551,7 +603,7 @@ app.get('/api/tasks', async (req, res) => {
     `;
 
     if (team) {
-      // team param = TEAMS.id (1â€“6); expand to DepartmentId filter
+      // team param = TEAMS.id (1–6); expand to DepartmentId filter
       const teamDef = TEAMS.find(t => t.id === parseInt(team));
       if (teamDef) {
         query += ` AND s.DepartmentId = ${teamDef.departmentId}`;
@@ -569,11 +621,11 @@ app.get('/api/tasks', async (req, res) => {
     const result = await request.query(query);
     res.json(result.recordset);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ History â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── History ──────────────────────────────────────────────────────────────────
 // Query param: ?range=7d|30d|90d  (default 30d)
 // Returns: { dates: ['2026-04-01', ...], byTeam: { 'Data Entry': [93, 91, ...], ... } }
 async function fetchHistoryData(range = '90d', customTargets = {}) {
@@ -582,7 +634,7 @@ async function fetchHistoryData(range = '90d', customTargets = {}) {
   const days  = range === '7d' ? 11 : range === '90d' ? 128 : 44;
   const pool    = await connectDB();
   const request = pool.request();
-  // No explicit timeout â€” inherits 180s from db.js (needed for cold-start full scan)
+  // No explicit timeout — inherits 180s from db.js (needed for cold-start full scan)
   const targetExpr = buildTargetExpr(customTargets);
   const refDate = TODAY_FIXED ? new Date(TODAY_FIXED + 'T00:00:00') : new Date();
   request.input('startDate', sql.DateTime, new Date(refDate.getTime() - days * 24 * 60 * 60 * 1000));
@@ -639,16 +691,16 @@ app.get('/api/history', async (req, res) => {
       ? await fetchHistoryData(range, customTargets)
       : await getCached('history', () => fetchHistoryData(range)));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Alerts â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Derived from active-task breach thresholds â€” no alerts table in the DB.
+// ─── Alerts ───────────────────────────────────────────────────────────────────
+// Derived from active-task breach thresholds — no alerts table in the DB.
 // Returns array: [{ id, severity, title, desc, triggeredAt, queueId }]
 //
 // _alertFirstSeen: persists the first time each alert condition was detected.
-// Key = "<teamId>-<severity>" â€” survives API re-calls so "3h ago" stays accurate.
+// Key = "<teamId>-<severity>" — survives API re-calls so "3h ago" stays accurate.
 const _alertFirstSeen = new Map();
 
 app.get('/api/alerts', async (req, res) => {
@@ -679,7 +731,7 @@ app.get('/api/alerts', async (req, res) => {
         alerts.push({
           id: `a${n++}`, severity,
           title: `${row.QueueName} SLA at risk`,
-          desc:  `SLA at ${pct}% â€” approaching breach threshold. ${row.overdue} overdue.`,
+          desc:  `SLA at ${pct}% — approaching breach threshold. ${row.overdue} overdue.`,
           triggeredAt, queueId: row.QueueId,
         });
       }
@@ -730,13 +782,13 @@ app.get('/api/alerts', async (req, res) => {
     });
     res.json(buildAlerts(rows));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Alert task drill-down â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Alert task drill-down ────────────────────────────────────────────────────
 // Returns top 50 active tasks for a team that are at-risk or overdue.
-// Query param: ?atRiskPct=87.5 (default 87.5 â€” matches frontend DEFAULT_SETTINGS)
+// Query param: ?atRiskPct=87.5 (default 87.5 — matches frontend DEFAULT_SETTINGS)
 app.get('/api/alert-tasks/:teamId', async (req, res) => {
   const teamId  = parseInt(req.params.teamId, 10);
   const teamDef = TEAMS.find(t => t.id === teamId);
@@ -825,14 +877,14 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
     const atrisk  = result.recordset.filter(r => r.taskType === 'atrisk');
     res.json([...overdue, ...atrisk]);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Loan Summary â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Loan Summary ─────────────────────────────────────────────────────────────
 // Returns count + total LoanAmount for 3 milestones: received, funder approved, settled.
 // Each bucket queries its own date column so each scan is range-limited and sargable.
-// Returns: { received, approved, settled } â€” each: { count, amount, deltas: { count, amount } }
+// Returns: { received, approved, settled } — each: { count, amount, deltas: { count, amount } }
 app.get('/api/loan-summary', async (req, res) => {
   try {
     const pool = await connectDB();
@@ -873,11 +925,11 @@ app.get('/api/loan-summary', async (req, res) => {
       settled:  parse(sett),
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Loan Detail â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Loan Detail ──────────────────────────────────────────────────────────────
 // Returns individual loan rows for drill-down on loan summary cards.
 // :type = 'received' | 'approved' | 'settled'
 // Returns: [{ ApplicationID, FunderName, LoanAmount }] filtered to today.
@@ -896,7 +948,7 @@ app.get('/api/loan-detail/:type', async (req, res) => {
     const result = await pool.request().query(`
       SELECT
         ApplicationID,
-        ISNULL(FunderName, 'â€”')                       AS FunderName,
+        ISNULL(FunderName, '—')                       AS FunderName,
         ISNULL(CAST(LoanAmount AS DECIMAL(18,2)), 0)  AS LoanAmount
       FROM Loans WITH (NOLOCK)
       WHERE ${col} >= '${today}' AND ${col} < '${todayNext}'
@@ -904,12 +956,19 @@ app.get('/api/loan-detail/:type', async (req, res) => {
     `);
     res.json(result.recordset);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Auth helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-const JWT_SECRET = process.env.JWT_SECRET || 'fallback-dev-secret-change-in-prod';
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+// Fail loudly if JWT_SECRET is missing or weak (CLAUDE.md Section 25 RULE 1 + RULE 4).
+// A silent fallback secret would let anyone forge tokens in production.
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  console.error('FATAL: JWT_SECRET environment variable is missing or shorter than 32 chars.');
+  console.error('Generate a strong secret with: node -e "console.log(require(\'crypto\').randomBytes(64).toString(\'hex\'))"');
+  process.exit(1);
+}
 
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization;
@@ -918,16 +977,16 @@ function requireAuth(req, res, next) {
     req.user = jwt.verify(auth.slice(7), JWT_SECRET);
     next();
   } catch {
-    res.status(401).json({ error: 'Token expired or invalid â€” please log in again' });
+    res.status(401).json({ error: 'Token expired or invalid — please log in again' });
   }
 }
 
-// â”€â”€â”€ Auth endpoints (public â€” no requireAuth) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Auth endpoints (public — no requireAuth) ─────────────────────────────────
 
 // POST /api/auth/forgot-password
-// Public â€” generates a time-limited reset token and returns it directly
+// Public — generates a time-limited reset token and returns it directly
 // (no email infrastructure; this is an internal dashboard tool)
-app.post('/api/auth/forgot-password', express.json(), async (req, res) => {
+app.post('/api/auth/forgot-password', authLimiter, express.json(), async (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'Email is required.' });
   try {
@@ -946,13 +1005,13 @@ app.post('/api/auth/forgot-password', express.json(), async (req, res) => {
       .query('UPDATE DashboardUsers SET ResetToken = @token, ResetTokenExpiry = @expiry WHERE Email = @email');
     res.json({ token, expiresIn: '1 hour' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
 // POST /api/auth/reset-password
-// Public â€” validates token, updates password, clears token
-app.post('/api/auth/reset-password', express.json(), async (req, res) => {
+// Public — validates token, updates password, clears token
+app.post('/api/auth/reset-password', authLimiter, express.json(), async (req, res) => {
   const { token, password } = req.body || {};
   if (!token || !password)
     return res.status(400).json({ error: 'Reset code and new password are required.' });
@@ -975,12 +1034,12 @@ app.post('/api/auth/reset-password', express.json(), async (req, res) => {
       .query('UPDATE DashboardUsers SET PasswordHash = @hash, ResetToken = NULL, ResetTokenExpiry = NULL WHERE UserID = @id');
     res.json({ message: 'Password updated successfully. You can now log in.' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
 // POST /api/auth/signup
-app.post('/api/auth/signup', express.json(), async (req, res) => {
+app.post('/api/auth/signup', authLimiter, express.json(), async (req, res) => {
   const { email, password, companyName } = req.body || {};
   if (!email || !password || !companyName)
     return res.status(400).json({ error: 'Email, password and company name are required.' });
@@ -999,12 +1058,12 @@ app.post('/api/auth/signup', express.json(), async (req, res) => {
   } catch (err) {
     if (err.message && err.message.includes('UNIQUE'))
       return res.status(409).json({ error: 'An account with that email already exists.' });
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
 // POST /api/auth/login
-app.post('/api/auth/login', express.json(), async (req, res) => {
+app.post('/api/auth/login', authLimiter, express.json(), async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password)
     return res.status(400).json({ error: 'Email and password are required.' });
@@ -1015,7 +1074,7 @@ app.post('/api/auth/login', express.json(), async (req, res) => {
       .query(`SELECT UserID, Email, CompanyName, PasswordHash, Role, IsApproved
               FROM DashboardUsers WHERE Email = @email`);
     const user = result.recordset[0];
-    // Same error message for wrong email OR wrong password â€” avoids user enumeration
+    // Same error message for wrong email OR wrong password — avoids user enumeration
     if (!user) return res.status(401).json({ error: 'Invalid email or password.' });
     if (!user.IsApproved) return res.status(403).json({ error: 'Your account is pending admin approval.' });
     const match = await bcrypt.compare(password, user.PasswordHash);
@@ -1027,11 +1086,11 @@ app.post('/api/auth/login', express.json(), async (req, res) => {
     );
     res.json({ token, email: user.Email, companyName: user.CompanyName, role: user.Role });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Admin-only middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Admin-only middleware ────────────────────────────────────────────────────
 function requireAdmin(req, res, next) {
   requireAuth(req, res, () => {
     if (req.user.role !== 'admin')
@@ -1040,9 +1099,9 @@ function requireAdmin(req, res, next) {
   });
 }
 
-// â”€â”€â”€ Admin: user management endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Admin: user management endpoints ────────────────────────────────────────
 
-// GET /api/admin/users â€” list all registered users (admin only)
+// GET /api/admin/users — list all registered users (admin only)
 app.get('/api/admin/users', requireAdmin, async (req, res) => {
   try {
     const pool = await connectDB();
@@ -1059,11 +1118,11 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
       createdAt:   u.CreatedAt,
     })));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// POST /api/admin/users/:id/approve â€” approve a pending user (admin only)
+// POST /api/admin/users/:id/approve — approve a pending user (admin only)
 app.post('/api/admin/users/:id/approve', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: 'Invalid user ID.' });
@@ -1074,11 +1133,11 @@ app.post('/api/admin/users/:id/approve', requireAdmin, async (req, res) => {
       .query('UPDATE DashboardUsers SET IsApproved = 1, IsRejected = 0 WHERE UserID = @id');
     res.json({ message: 'User approved.' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// POST /api/admin/users/:id/reject â€” reject a user (admin only)
+// POST /api/admin/users/:id/reject — reject a user (admin only)
 app.post('/api/admin/users/:id/reject', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: 'Invalid user ID.' });
@@ -1089,13 +1148,13 @@ app.post('/api/admin/users/:id/reject', requireAdmin, async (req, res) => {
       .query('UPDATE DashboardUsers SET IsApproved = 0, IsRejected = 1 WHERE UserID = @id');
     res.json({ message: 'User rejected.' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Staff List â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// GET /api/staff/departments  â€” all departments with active staff count (ordered high â†’ low)
-// GET /api/staff/department/:id â€” active staff detail for one department
+// ─── Staff List ───────────────────────────────────────────────────────────────
+// GET /api/staff/departments  — all departments with active staff count (ordered high → low)
+// GET /api/staff/department/:id — active staff detail for one department
 app.use('/api/staff', requireAuth);
 
 app.get('/api/staff/departments', async (req, res) => {
@@ -1120,7 +1179,7 @@ app.get('/api/staff/departments', async (req, res) => {
       totalStaff:     r.TotalStaff,
     })));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
@@ -1153,11 +1212,11 @@ app.get('/api/staff/department/:departmentId', async (req, res) => {
       isGroup:        r.IsGroup,
     })));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    sendError(res, 500, 'Internal server error', err);
   }
 });
 
-// â”€â”€â”€ Protect all data endpoints with JWT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Protect all data endpoints with JWT ─────────────────────────────────────
 app.use('/api/kpi-summary',   requireAuth);
 app.use('/api/teams',         requireAuth);
 app.use('/api/tasks',         requireAuth);
@@ -1167,10 +1226,10 @@ app.use('/api/alert-tasks',   requireAuth);
 app.use('/api/loan-summary',  requireAuth);
 app.use('/api/loan-detail',   requireAuth);
 
-// â”€â”€â”€ Start server â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ─── Start server ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, async () => {
-  console.log(`SLA Dashboard backend running on port ${PORT} â€” mode: ${USE_MOCK ? 'MOCK DATA' : 'LIVE DATABASE'}`);
+  console.log(`SLA Dashboard backend running on port ${PORT} — mode: ${USE_MOCK ? 'MOCK DATA' : 'LIVE DATABASE'}`);
 
   // Ensure IsRejected column exists (safe no-op if already present)
   if (!USE_MOCK) {
