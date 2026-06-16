@@ -39,8 +39,8 @@ function normalizeTask(t, settings = {}) {
   const status  = pct > 1 ? 'bad' : pct >= atRisk ? 'warn' : 'ok';
   return {
     id:       `T-${t.TaskID}`,
-    desc:     (t.StaffFullName && t.StaffFullName.trim()) ? t.StaffFullName : (t.TaskName || 'Unnamed Task'),
-    client:   t.ClientName     || t.AssignedToName || '-',
+    desc:     (t.StaffFullName && t.StaffFullName.trim()) ? t.StaffFullName.trim() : (t.TaskName || 'Unnamed Task'),
+    client:   t.TaskName || t.ClientName || t.AssignedToName || '-',
     status,
     tatHours: tatH,
     priority: t.Priority === 'high' ? 'high' : t.Priority === 'med' ? 'med' : 'low',
