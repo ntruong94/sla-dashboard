@@ -630,6 +630,7 @@ app.get('/api/tasks', async (req, res) => {
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN ConfigTaskStatus ts WITH (NOLOCK) ON t.TaskStatusID = ts.ConfigTaskStatusID
       LEFT  JOIN Staff s             WITH (NOLOCK) ON t.AssignedTo   = s.StaffID
+      ${LOAN_STATUS_JOIN}
       WHERE t.TaskStatusID IN (1, 4, 5, 6)  -- In Progress, On Hold, On Queue, Not Queued
         AND ${TEAM_FILTER}
     `;
