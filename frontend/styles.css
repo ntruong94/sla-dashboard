@@ -36,6 +36,8 @@
   --t4: #D97706;
   --t5: #0E8A6B;
   --t6: #C8102E;
+  --t7: #7C3AED;
+  --t8: #0891B2;
 
   /* Card / panel surface */
   --card-bg: rgba(255, 255, 255, 0.18);
@@ -413,7 +415,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 
 .team-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 14px;
 }
 

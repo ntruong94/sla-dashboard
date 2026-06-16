@@ -3,12 +3,14 @@
 // Colours match the CSS variables --t1 … --t6 defined in styles.css.
 
 export const TEAM_COLORS = {
-  'Data Entry':                'var(--t1)',
-  'Pre-Valuation Department':  'var(--t2)',
-  'Ezy Client Care':           'var(--t3)',
-  'Packaging & QA Department': 'var(--t4)',
-  'Approvals Department':      'var(--t5)',
-  'Settlements Department':    'var(--t6)',
+  'Data Entry':        'var(--t1)',
+  'Valuations':        'var(--t2)',
+  'Assessments':       'var(--t3)',
+  'Packaging & QA':    'var(--t4)',
+  'CLA':               'var(--t5)',
+  'Funder Submission': 'var(--t6)',
+  'Settlement':        'var(--t7)',
+  'Ezy Client Care':   'var(--t8)',
 };
 
 export const slaClass = (pct) => pct >= 90 ? 'ok' : pct >= 75 ? 'warn' : 'bad';

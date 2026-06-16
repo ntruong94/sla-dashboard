@@ -12,7 +12,7 @@
 **Database:** SQL Server — database name: `SEReport`
 **Status:** **Live** — backend connected to SQL Server (`DESKTOP-HGGDDCR`, DB `MySEReport`). All KPI tiles, team cards, and delta indicators show live SQL data. Servers: backend `http://localhost:5000`, frontend `http://localhost:5173`.
 
-**Admin account:** `ntruong@mezy.com.au` (role: `admin`, password: `123456`). Only this account can access the User Management panel inside the dashboard to approve or reject user access requests.
+**Admin account:** `ntruong@mezy.com.au` (role: `admin`, password: `123456789`). Only this account can access the User Management panel inside the dashboard to approve or reject user access requests.
 
 ---
 
@@ -111,27 +111,37 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 
 ## 6. Dashboard Teams
 
-The dashboard maps **6 logical teams** using `Staff.DepartmentId` in the live database. No `ConfigQueue.QueueId` filtering is used.
+The dashboard maps **8 logical teams**. Teams 1–4, 7, 8 use `Staff.DepartmentId`. Teams 5–6 (CLA, Funder Submission) use `ConfigLoanStatus.Name` via `REPORT_Loans_Extension` join.
 
-| id | Dashboard Name | Department | SLA Target | DepartmentId |
-|----|---------------|------------|------------|--------------|
-| 1 | Data Entry | Origination | 4 hours | 101 |
-| 2 | Pre-Valuation Department | Origination | 4 hours | 128 |
-| 3 | Ezy Client Care | Client Care | 4 hours | 10 |
-| 4 | Packaging & QA Department | Credit | 4 hours | 122 |
-| 5 | Approvals Department | Credit | 4 hours | 86 |
-| 6 | Settlements Department | Settlement | 4 hours | 82 |
+| id | Dashboard Name | Department | SLA Target | Filter |
+|----|---------------|------------|------------|--------|
+| 1 | Data Entry | Origination | 4 hours | `Staff.DepartmentId = 101` |
+| 2 | Valuations | Origination | 4 hours | `Staff.DepartmentId = 110` |
+| 3 | Assessments | Credit | 4 hours | `Staff.DepartmentId = 86` |
+| 4 | Packaging & QA | Credit | 4 hours | `Staff.DepartmentId = 122` |
+| 5 | CLA | Credit | 4 hours | `cls.Name LIKE '%CLA%'` |
+| 6 | Funder Submission | Credit | 4 hours | `cls.Name LIKE '%funder approval to be obtained%' OR cls.Name LIKE '%house%'` |
+| 7 | Settlement | Settlement | 4 hours | `Staff.DepartmentId = 12` |
+| 8 | Ezy Client Care | Client Care | 4 hours | `Staff.DepartmentId = 10` |
 
-> **UPDATED 2026-06-11** — All 6 teams now use `Staff.DepartmentId` exclusively. `ConfigFunction.QueueID` is no longer used for team filtering.
-> Staff rows are matched via `t.AssignedTo = s.StaffID`. Only Staff with `EmployeeStatus = 1` are matched by the filter. The `IsGroup` condition has been removed.
-> All tasks assigned outside these 6 departments are excluded from the dashboard.
+> **UPDATED 2026-06-16** — Restructured from 6 teams to 8 teams.
+> Teams 5 & 6 are identified by the application's current loan status (`ConfigLoanStatus.Name`) via `REPORT_Loans_Extension` join, **not** by `Staff.DepartmentId`.
+> All dept-based teams still require `s.EmployeeStatus = 1`.
 
 **Backend implementation:** `TEAMS` constant in `backend/server.js` defines the mapping.
-- All teams use `departmentId` field — filtered via `LEFT JOIN Staff ON t.AssignedTo = s.StaffID WHERE s.DepartmentId = N AND s.EmployeeStatus = 1`
-- `TEAM_FILTER` constant: `s.DepartmentId IN (101, 128, 10, 122, 86, 82) AND s.EmployeeStatus = 1`
-- `TEAM_ID_CASE` SQL CASE expression maps each task → team id using `WHEN s.DepartmentId = N THEN id`
-- `ConfigFunction` / `ConfigQueue` joins are not used in any aggregate query
-- The `?team=<id>` query param on `/api/tasks` accepts team id 1–6 and expands to `s.DepartmentId = N`
+- Teams 1–4, 7, 8 use `departmentId` field — filtered via `LEFT JOIN Staff ON t.AssignedTo = s.StaffID WHERE s.DepartmentId = N AND s.EmployeeStatus = 1`
+- Teams 5–6 use `type: 'loan_status'` and `clsFilter` field — joined via:
+  ```sql
+  LEFT JOIN REPORT_Loans_Extension rle ON t.ApplicationID = rle.ApplicationID
+  LEFT JOIN ConfigLoanStatus cls ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId
+  ```
+  and filtered by `cls.Name LIKE N'%...'` pattern
+- `TEAM_FILTER` constant: `(s.DepartmentId IN (101,110,86,122,12,10) AND s.EmployeeStatus = 1) OR <cls filters>`
+- `LOAN_STATUS_JOIN` constant: the two LEFT JOINs above — injected into all aggregate queries after the Staff join
+- `TEAM_ID_CASE` SQL CASE: dept teams → `WHEN s.DepartmentId = N THEN id`; loan_status teams → `WHEN cls.Name LIKE N'%...' THEN id`
+- The `?team=<id>` query param on `/api/tasks` accepts team id 1–8; dept teams add `s.DepartmentId = N AND s.EmployeeStatus = 1`; loan_status teams add the `clsFilter` expression
+- `TEAM_COLORS` in `constants.js`: keyed by team name string → `var(--t1)` … `var(--t8)`
+- CSS: `--t7: #7C3AED; --t8: #0891B2` added to styles.css; `.team-grid` uses `repeat(4, 1fr)` (4 columns)
 
 ---
 
@@ -611,6 +621,14 @@ SLA Dashboard/
 ### Component Stability Rule
 - `components/components.jsx`, `views.jsx`, `history-chart.jsx`, `trend.jsx`, `icons.jsx` are production-quality and stable.
 - Make targeted additions only; do not refactor structure unless explicitly asked.
+
+### Drill-Through "Task Name" Display Rule (2026-06-16)
+- In **all drill-through views** (TaskModal from team cards/KPI cards, TasksView table, AlertsPanel overdue/at-risk rows), the primary display field under the "Task Name / Description" column shows the **staff member's full name**: `FirstName + ' ' + Surname`.
+- Source: `RTRIM(ISNULL(s.FirstName,'')) + ' ' + RTRIM(ISNULL(s.Surname,'')) AS StaffFullName` — computed in SQL via the existing `LEFT JOIN Staff s ON t.AssignedTo = s.StaffID`.
+- Fallback chain if staff name is empty/null: `TaskName` (for `/api/tasks`) or `ShortDescription` (for `/api/alert-tasks`), then `'Task #<id>'`.
+- Implemented in: `normalizeTask()` in `App.jsx` (`desc` field), and both overdue + at-risk rows in `AlertsPanel` in `components.jsx`.
+- `/api/tasks` SQL: adds `StaffFullName` computed column alongside the existing `AssignedToName` (FirstName only, kept for the secondary `client` line).
+- `/api/alert-tasks` SQL: adds `StaffFullName` to both UNION branches (overdue and at-risk).
 
 ### Chart Rendering Rules (2026-06-15)
 

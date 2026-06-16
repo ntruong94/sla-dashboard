@@ -1,4 +1,4 @@
-const express   = require('express');
+ï»¿const express   = require('express');
 const cors      = require('cors');
 const helmet    = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -23,24 +23,34 @@ function sendError(res, status, publicMessage, err) {
 }
 
 // --- Team definitions ---------------------------------------------------------
-// All 6 teams are now filtered by Staff.DepartmentId — ConfigQueue.QueueId is NOT used.
-// Only Staff rows with EmployeeStatus = 1 are used for team identification.
+// 8 teams mapped to either Staff.DepartmentId (dept-based) or a loan status
+// pattern via REPORT_Loans_Extension -> ConfigLoanStatus (loan_status-based).
+// Only dept-based teams require s.EmployeeStatus = 1.
 const TEAMS = [
-  { id: 1, name: 'Data Entry',                dept: 'Origination',  target: 4, departmentId: 101 },
-  { id: 2, name: 'Pre-Valuation Department',  dept: 'Origination',  target: 4, departmentId: 128 },
-  { id: 3, name: 'Ezy Client Care',           dept: 'Client Care',  target: 4, departmentId: 10  },
-  { id: 4, name: 'Packaging & QA Department', dept: 'Credit',       target: 4, departmentId: 122 },
-  { id: 5, name: 'Approvals Department',      dept: 'Credit',       target: 4, departmentId: 86  },
-  { id: 6, name: 'Settlements Department',    dept: 'Settlement',   target: 4, departmentId: 82  },
+  { id: 1, name: 'Data Entry',        dept: 'Origination',  target: 4, departmentId: 101 },
+  { id: 2, name: 'Valuations',        dept: 'Origination',  target: 4, departmentId: 110 },
+  { id: 3, name: 'Assessments',       dept: 'Credit',       target: 4, departmentId: 86  },
+  { id: 4, name: 'Packaging & QA',    dept: 'Credit',       target: 4, departmentId: 122 },
+  // Teams 5 & 6 identified by the application's current ConfigLoanStatus.Name
+  // via: LEFT JOIN REPORT_Loans_Extension rle ON t.ApplicationID = rle.ApplicationID
+  //       LEFT JOIN ConfigLoanStatus cls ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId
+  { id: 5, name: 'CLA',               dept: 'Credit',       target: 4, departmentId: null,
+    type: 'loan_status',
+    clsFilter: "cls.Name LIKE N'%CLA%'" },
+  { id: 6, name: 'Funder Submission', dept: 'Credit',       target: 4, departmentId: null,
+    type: 'loan_status',
+    clsFilter: "(cls.Name LIKE N'%funder approval to be obtained%' OR cls.Name LIKE N'%house%')" },
+  { id: 7, name: 'Settlement',        dept: 'Settlement',   target: 4, departmentId: 12  },
+  { id: 8, name: 'Ezy Client Care',   dept: 'Client Care',  target: 4, departmentId: 10  },
 ];
-// All teams use DepartmentId — ConfigQueue.QueueId is not used for team filtering.
-const DEPT_TEAM_IDS = TEAMS.map(t => t.departmentId); // [101, 128, 10, 122, 86, 82]
+// DepartmentIds for dept-based teams only (excludes loan_status teams 5 & 6).
+const DEPT_TEAM_IDS = TEAMS.filter(t => t.departmentId).map(t => t.departmentId); // [101,110,86,122,12,10]
 
 // --- Date helpers for KPI delta (vs previous business day) -------------------
 // TODAY_FIXED: override date for testing. Set to null to use real local clock.
-// Set to '2026-05-28' — last date with actual task data in the backed-up DB snapshot.
+// Set to '2026-05-28' ï¿½ last date with actual task data in the backed-up DB snapshot.
 const TODAY_FIXED = '2026-05-28';
-// Returns today's date as YYYY-MM-DD using local clock (not UTC — avoids AEST off-by-one)
+// Returns today's date as YYYY-MM-DD using local clock (not UTC ï¿½ avoids AEST off-by-one)
 function todayLocal() {
   if (TODAY_FIXED) return TODAY_FIXED;
   const d = new Date();
@@ -54,7 +64,7 @@ function prevBizDay(dateStr) {
   const dow = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
   const offset = dow === 1 ? -3 : dow === 0 ? -2 : -1; // Mon?Fri, Sun?Fri, else -1
   d.setDate(d.getDate() + offset);
-  // Use local date parts — toISOString() would return UTC and lose a day in AEST
+  // Use local date parts ï¿½ toISOString() would return UTC and lose a day in AEST
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
@@ -75,18 +85,31 @@ function computeDates() {
   return { today, prev, todayNext: nextDay(today), prevNext: nextDay(prev) };
 }
 
-// Build a SQL CASE expression mapping tasks ? team id (1–6).
-// All teams use s.DepartmentId via LEFT JOIN Staff (EmployeeStatus=1).
+// Build SQL CASE expressions mapping tasks -> team id / name (1-8).
+// Dept-based teams use s.DepartmentId; loan_status teams use cls.Name (ConfigLoanStatus).
+// Requires: LEFT JOIN Staff s ON t.AssignedTo = s.StaffID
+//           LEFT JOIN REPORT_Loans_Extension rle ON t.ApplicationID = rle.ApplicationID
+//           LEFT JOIN ConfigLoanStatus cls ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId
 const TEAM_ID_CASE = TEAMS.map(t =>
-  `WHEN s.DepartmentId = ${t.departmentId} THEN ${t.id}`
+  t.departmentId
+    ? `WHEN s.DepartmentId = ${t.departmentId} THEN ${t.id}`
+    : `WHEN ${t.clsFilter} THEN ${t.id}`
 ).join(' ');
-// Build a SQL CASE expression mapping tasks ? team name string (for /api/tasks).
 const TEAM_NAME_CASE = TEAMS.map(t =>
-  `WHEN s.DepartmentId = ${t.departmentId} THEN '${t.name}'`
+  t.departmentId
+    ? `WHEN s.DepartmentId = ${t.departmentId} THEN '${t.name}'`
+    : `WHEN ${t.clsFilter} THEN '${t.name}'`
 ).join(' ');
-// Combined WHERE predicate — all 6 teams filtered via Staff.DepartmentId.
-// Only active staff (EmployeeStatus=1) are matched.
-const TEAM_FILTER = `s.DepartmentId IN (${DEPT_TEAM_IDS.join(',')}) AND s.EmployeeStatus = 1`;
+// WHERE predicate: dept-based teams by Staff.DepartmentId; loan_status teams by cls.Name.
+const LOAN_STATUS_TEAMS = TEAMS.filter(t => t.type === 'loan_status');
+const TEAM_FILTER = `(
+  (s.DepartmentId IN (${DEPT_TEAM_IDS.join(',')}) AND s.EmployeeStatus = 1)
+  OR ${LOAN_STATUS_TEAMS.map(t => t.clsFilter).join(' OR ')}
+)`;
+// SQL JOINs required for loan_status teams (safe to include in all queries as LEFT JOINs).
+const LOAN_STATUS_JOIN = `
+      LEFT JOIN REPORT_Loans_Extension rle WITH (NOLOCK) ON t.ApplicationID = rle.ApplicationID
+      LEFT JOIN ConfigLoanStatus       cls WITH (NOLOCK) ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId`;
 
 // --- Custom-target helpers ----------------------------------------------------
 // Parse ?t1=2&t2=4&t3=4&t4=4&t5=4&t6=4 into { 1: 2.0, 2: 4.0, ... }
@@ -106,7 +129,9 @@ function buildTargetExpr(customTargets) {
   const cases = TEAMS.map(team => {
     const h = customTargets[team.id];
     if (!h) return null;
-    return `WHEN s.DepartmentId = ${team.departmentId} THEN ${h}`;
+    return team.departmentId
+      ? `WHEN s.DepartmentId = ${team.departmentId} THEN ${h}`
+      : `WHEN ${team.clsFilter} THEN ${h}`;
   }).filter(Boolean);
   if (cases.length === 0) return 't.SLAInHours';
   return `CASE ${cases.join(' ')} ELSE t.SLAInHours END`;
@@ -121,10 +146,10 @@ const NOW_SQL = TODAY_FIXED
   ? `CAST('${nextDay(TODAY_FIXED)}' AS DATETIME)`
   : `GETDATE()`;
 
-// Elapsed hours for OPEN (active) tasks — real-time: NOW_SQL minus creation time.
+// Elapsed hours for OPEN (active) tasks ï¿½ real-time: NOW_SQL minus creation time.
 // Use for all overdue / at-risk / avgTat calculations on active tasks.
 const OPEN_TAT_EXPR   = `DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0`;
-// Elapsed hours for CLOSED (completed) tasks — DateCompleted minus DateCreated.
+// Elapsed hours for CLOSED (completed) tasks ï¿½ DateCompleted minus DateCreated.
 // Use for SLA compliance checks and avgTat on completed tasks.
 const CLOSED_TAT_EXPR = `DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0`;
 
@@ -163,10 +188,10 @@ async function fetchKpiData(customTargets = {}) {
   const targetExpr = buildTargetExpr(customTargets);
 
   // Two parallel queries:
-  // Q1: totalTasks, avgTat, totalOverdue — active/all tasks, filtered by DateCreated.
+  // Q1: totalTasks, avgTat, totalOverdue ï¿½ active/all tasks, filtered by DateCreated.
   //     TAT for open tasks = GETDATE() - DateCreated (real-time elapsed).
   //     TAT for closed tasks = DateCompleted - DateCreated.
-  // Q2: overallSla — completed tasks (status=2), filtered by DateCompleted.
+  // Q2: overallSla ï¿½ completed tasks (status=2), filtered by DateCompleted.
   //     SLA compliance = DATEDIFF(DateCreated, DateCompleted) <= configured target.
   const [mainRes, slaRes] = await Promise.all([
     pool.request().query(`
@@ -205,11 +230,12 @@ async function fetchKpiData(customTargets = {}) {
                       END ELSE NULL END)                                          AS prevTat
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+      ${LOAN_STATUS_JOIN}
       WHERE t.TaskStatusID IN (1, 2, 4, 5, 6)
         AND ${TEAM_FILTER}
         AND t.DateCreated >= '${prev}' AND t.DateCreated < '${todayNext}'
     `),
-    // SLA% uses DateCompleted — completed tasks regardless of when they were created.
+    // SLA% uses DateCompleted ï¿½ completed tasks regardless of when they were created.
     // TAT for closed tasks = DateCompleted - DateCreated (computed, not stored field).
     // targetExpr uses custom per-team target hours when configured, else t.SLAInHours.
     pool.request().query(`
@@ -228,6 +254,7 @@ async function fetchKpiData(customTargets = {}) {
                             THEN 1 ELSE 0 END), 0) * 100                         AS prevSla
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+      ${LOAN_STATUS_JOIN}
       WHERE t.TaskStatusID = 2
         AND ${TEAM_FILTER}
         AND t.DateCompleted >= '${prev}' AND t.DateCompleted < '${todayNext}'
@@ -258,10 +285,10 @@ async function fetchTeamsData(customTargets = {}) {
   const targetExpr = buildTargetExpr(customTargets);
 
   // Three parallel queries:
-  // Q1: volume, avgTat, overdue — active/all tasks, DateCreated today.
+  // Q1: volume, avgTat, overdue ï¿½ active/all tasks, DateCreated today.
   //     TAT for open tasks = GETDATE()-DateCreated; closed = DateCompleted-DateCreated.
-  // Q2: volume/overdue/TAT deltas — DateCreated today + prev.
-  // Q3: SLA% per team — completed tasks (status=2), DateCompleted today + prev.
+  // Q2: volume/overdue/TAT deltas ï¿½ DateCreated today + prev.
+  // Q3: SLA% per team ï¿½ completed tasks (status=2), DateCompleted today + prev.
   //     SLA compliance = DATEDIFF(DateCreated, DateCompleted) <= configured target.
   //     targetExpr uses custom per-team target hours when configured, else t.SLAInHours.
   const [result, delta, slaResult] = await Promise.all([
@@ -284,12 +311,13 @@ async function fetchTeamsData(customTargets = {}) {
                  THEN 1 ELSE 0 END) AS overdue
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+      ${LOAN_STATUS_JOIN}
       WHERE t.TaskStatusID IN (1, 2, 4, 5, 6)
         AND ${TEAM_FILTER}
         AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
       GROUP BY CASE ${TEAM_ID_CASE} END
     `),
-    // Delta query: volume/overdue/TAT only — all date-scoped by DateCreated
+    // Delta query: volume/overdue/TAT only ï¿½ all date-scoped by DateCreated
     pool.request().query(`
       SELECT
         CASE ${TEAM_ID_CASE} END AS teamId,
@@ -301,6 +329,7 @@ async function fetchTeamsData(customTargets = {}) {
         AVG(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  THEN CASE WHEN t.TaskStatusID IN (1,4,5,6) THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 END ELSE NULL END) AS prevTat
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+      ${LOAN_STATUS_JOIN}
       WHERE t.TaskStatusID IN (1, 2, 4, 5, 6)
         AND ${TEAM_FILTER}
         AND t.DateCreated >= '${prev}' AND t.DateCreated < '${todayNext}'
@@ -326,6 +355,7 @@ async function fetchTeamsData(customTargets = {}) {
                             THEN 1 ELSE 0 END), 0) * 100                         AS prevSla
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+      ${LOAN_STATUS_JOIN}
       WHERE t.TaskStatusID = 2
         AND ${TEAM_FILTER}
         AND t.DateCompleted >= '${prev}' AND t.DateCompleted < '${todayNext}'
@@ -423,7 +453,7 @@ app.get('/api/health', (req, res) => {
 // Pings the SQL Server with SELECT 1. Use this to verify the connection works.
 app.get('/api/db-health', async (req, res) => {
   if (USE_MOCK) {
-    return res.json({ status: 'OK', mode: 'mock', message: 'Mock mode — no DB connection attempted.' });
+    return res.json({ status: 'OK', mode: 'mock', message: 'Mock mode ï¿½ no DB connection attempted.' });
   }
   try {
     const pool = await connectDB();
@@ -501,7 +531,7 @@ app.get('/api/kpi-summary', async (req, res) => {
   try {
     const customTargets = parseTargets(req.query);
     const hasCustom = Object.keys(customTargets).length > 0;
-    // Bypass cache when custom targets are set — serve fresh data with the correct thresholds.
+    // Bypass cache when custom targets are set ï¿½ serve fresh data with the correct thresholds.
     res.json(hasCustom ? await fetchKpiData(customTargets) : await getCached('kpi', fetchKpiData));
   } catch (err) {
     sendError(res, 500, 'Internal server error', err);
@@ -564,13 +594,13 @@ app.get('/api/tasks', async (req, res) => {
   try {
     const pool    = await connectDB();
     const request = pool.request();
-    // atRiskFraction: default 87.5%, configurable via ?atRiskPct=N (clamped 50–99)
+    // atRiskFraction: default 87.5%, configurable via ?atRiskPct=N (clamped 50ï¿½99)
     const atRiskFraction = Math.min(0.99, Math.max(0.50, parseFloat(req.query.atRiskPct || 87.5) / 100));
 
     // Tasks are mapped to teams via Staff.DepartmentId (AssignedTo ? Staff ? DepartmentId).
     // SLARemaining comes from TaskRelation (IsCurrent = 1 row).
     // Limited to TOP 500 sorted by worst SLA first to avoid timeout on large datasets.
-    // TaskRelation join removed — expensive on large tables; SLARemaining set to NULL.
+    // TaskRelation join removed ï¿½ expensive on large tables; SLARemaining set to NULL.
     let query = `
       SELECT TOP 500
         t.TaskID,
@@ -605,10 +635,16 @@ app.get('/api/tasks', async (req, res) => {
     `;
 
     if (team) {
-      // team param = TEAMS.id (1–6); expand to DepartmentId filter
+      // team param = TEAMS.id (1ï¿½6); expand to DepartmentId filter
       const teamDef = TEAMS.find(t => t.id === parseInt(team));
       if (teamDef) {
-        query += ` AND s.DepartmentId = ${teamDef.departmentId}`;
+        if (teamDef.departmentId) {
+          // dept-based team: filter by Staff.DepartmentId
+          query += ` AND s.DepartmentId = ${teamDef.departmentId} AND s.EmployeeStatus = 1`;
+        } else {
+          // loan_status-based team (CLA/Funder Submission): filter by ConfigLoanStatus.Name
+          query += ` AND ${teamDef.clsFilter}`;
+        }
       }
     }
     if (status === 'ok') {
@@ -636,7 +672,7 @@ async function fetchHistoryData(range = '90d', customTargets = {}) {
   const days  = range === '7d' ? 11 : range === '90d' ? 128 : 44;
   const pool    = await connectDB();
   const request = pool.request();
-  // No explicit timeout — inherits 180s from db.js (needed for cold-start full scan)
+  // No explicit timeout ï¿½ inherits 180s from db.js (needed for cold-start full scan)
   const targetExpr = buildTargetExpr(customTargets);
   const refDate = TODAY_FIXED ? new Date(TODAY_FIXED + 'T00:00:00') : new Date();
   request.input('startDate', sql.DateTime, new Date(refDate.getTime() - days * 24 * 60 * 60 * 1000));
@@ -648,6 +684,7 @@ async function fetchHistoryData(range = '90d', customTargets = {}) {
         SUM(CASE WHEN DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${targetExpr} THEN 1 ELSE 0 END) AS compliant
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+      ${LOAN_STATUS_JOIN}
       WHERE t.TaskStatusID = 2
         AND t.DateCompleted >= @startDate
         AND t.DateCompleted IS NOT NULL
@@ -698,11 +735,11 @@ app.get('/api/history', async (req, res) => {
 });
 
 // --- Alerts -------------------------------------------------------------------
-// Derived from active-task breach thresholds — no alerts table in the DB.
+// Derived from active-task breach thresholds ï¿½ no alerts table in the DB.
 // Returns array: [{ id, severity, title, desc, triggeredAt, queueId }]
 //
 // _alertFirstSeen: persists the first time each alert condition was detected.
-// Key = "<teamId>-<severity>" — survives API re-calls so "3h ago" stays accurate.
+// Key = "<teamId>-<severity>" ï¿½ survives API re-calls so "3h ago" stays accurate.
 const _alertFirstSeen = new Map();
 
 app.get('/api/alerts', async (req, res) => {
@@ -733,7 +770,7 @@ app.get('/api/alerts', async (req, res) => {
         alerts.push({
           id: `a${n++}`, severity,
           title: `${row.QueueName} SLA at risk`,
-          desc:  `SLA at ${pct}% — approaching breach threshold. ${row.overdue} overdue.`,
+          desc:  `SLA at ${pct}% ï¿½ approaching breach threshold. ${row.overdue} overdue.`,
           triggeredAt, queueId: row.QueueId,
         });
       }
@@ -773,6 +810,7 @@ app.get('/api/alerts', async (req, res) => {
                    OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate) THEN 1 ELSE 0 END) AS overdue
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+      ${LOAN_STATUS_JOIN}
       WHERE t.TaskStatusID IN (1, 4, 5, 6)
         AND ${TEAM_FILTER}
       GROUP BY CASE ${TEAM_ID_CASE} END
@@ -790,7 +828,7 @@ app.get('/api/alerts', async (req, res) => {
 
 // --- Alert task drill-down ----------------------------------------------------
 // Returns top 50 active tasks for a team that are at-risk or overdue.
-// Query param: ?atRiskPct=87.5 (default 87.5 — matches frontend DEFAULT_SETTINGS)
+// Query param: ?atRiskPct=87.5 (default 87.5 ï¿½ matches frontend DEFAULT_SETTINGS)
 app.get('/api/alert-tasks/:teamId', async (req, res) => {
   const teamId  = parseInt(req.params.teamId, 10);
   const teamDef = TEAMS.find(t => t.id === teamId);
@@ -822,9 +860,19 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
 
   try {
     const pool = await connectDB();
-    // All teams use Staff.DepartmentId for filtering.
-    const teamFilter = `s.DepartmentId = ${teamDef.departmentId} AND s.EmployeeStatus = 1`;
-    const staffJoin = 'LEFT JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID';
+    // Dept-based teams filter by Staff.DepartmentId; loan_status teams filter by ConfigLoanStatus.Name.
+    // Loan_status teams also need REPORT_Loans_Extension + ConfigLoanStatus joins.
+    let teamFilter, extraJoin;
+    if (teamDef.departmentId) {
+      teamFilter = `s.DepartmentId = ${teamDef.departmentId} AND s.EmployeeStatus = 1`;
+      extraJoin  = '';
+    } else {
+      teamFilter = teamDef.clsFilter;
+      extraJoin  = `
+      LEFT JOIN REPORT_Loans_Extension rle WITH (NOLOCK) ON t.ApplicationID = rle.ApplicationID
+      LEFT JOIN ConfigLoanStatus       cls WITH (NOLOCK) ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId`;
+    }
+    const staffJoin = `LEFT JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID${extraJoin}`;
     // UNION guarantees both overdue (real-time TAT > SLA) and at-risk tasks are shown.
     // TAT = DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0 for all active tasks.
     // slaExpr: custom target hours from Settings if configured, else DB t.SLAInHours.
@@ -888,7 +936,7 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
 // --- Loan Summary -------------------------------------------------------------
 // Returns count + total LoanAmount for 3 milestones: received, funder approved, settled.
 // Each bucket queries its own date column so each scan is range-limited and sargable.
-// Returns: { received, approved, settled } — each: { count, amount, deltas: { count, amount } }
+// Returns: { received, approved, settled } ï¿½ each: { count, amount, deltas: { count, amount } }
 app.get('/api/loan-summary', async (req, res) => {
   try {
     const pool = await connectDB();
@@ -952,7 +1000,7 @@ app.get('/api/loan-detail/:type', async (req, res) => {
     const result = await pool.request().query(`
       SELECT
         ApplicationID,
-        ISNULL(FunderName, '—')                       AS FunderName,
+        ISNULL(FunderName, 'ï¿½')                       AS FunderName,
         ISNULL(CAST(LoanAmount AS DECIMAL(18,2)), 0)  AS LoanAmount
       FROM Loans WITH (NOLOCK)
       WHERE ${col} >= '${today}' AND ${col} < '${todayNext}'
@@ -981,14 +1029,14 @@ function requireAuth(req, res, next) {
     req.user = jwt.verify(auth.slice(7), JWT_SECRET);
     next();
   } catch {
-    res.status(401).json({ error: 'Token expired or invalid — please log in again' });
+    res.status(401).json({ error: 'Token expired or invalid ï¿½ please log in again' });
   }
 }
 
-// --- Auth endpoints (public — no requireAuth) ---------------------------------
+// --- Auth endpoints (public ï¿½ no requireAuth) ---------------------------------
 
 // POST /api/auth/forgot-password
-// Public — generates a time-limited reset token and returns it directly
+// Public ï¿½ generates a time-limited reset token and returns it directly
 // (no email infrastructure; this is an internal dashboard tool)
 app.post('/api/auth/forgot-password', authLimiter, express.json(), async (req, res) => {
   const { email } = req.body || {};
@@ -1014,7 +1062,7 @@ app.post('/api/auth/forgot-password', authLimiter, express.json(), async (req, r
 });
 
 // POST /api/auth/reset-password
-// Public — validates token, updates password, clears token
+// Public ï¿½ validates token, updates password, clears token
 app.post('/api/auth/reset-password', authLimiter, express.json(), async (req, res) => {
   const { token, password } = req.body || {};
   if (!token || !password)
@@ -1078,7 +1126,7 @@ app.post('/api/auth/login', authLimiter, express.json(), async (req, res) => {
       .query(`SELECT UserID, Email, CompanyName, PasswordHash, Role, IsApproved
               FROM DashboardUsers WHERE Email = @email`);
     const user = result.recordset[0];
-    // Same error message for wrong email OR wrong password — avoids user enumeration
+    // Same error message for wrong email OR wrong password ï¿½ avoids user enumeration
     if (!user) return res.status(401).json({ error: 'Invalid email or password.' });
     if (!user.IsApproved) return res.status(403).json({ error: 'Your account is pending admin approval.' });
     const match = await bcrypt.compare(password, user.PasswordHash);
@@ -1105,7 +1153,7 @@ function requireAdmin(req, res, next) {
 
 // --- Admin: user management endpoints ----------------------------------------
 
-// GET /api/admin/users — list all registered users (admin only)
+// GET /api/admin/users ï¿½ list all registered users (admin only)
 app.get('/api/admin/users', requireAdmin, async (req, res) => {
   try {
     const pool = await connectDB();
@@ -1126,7 +1174,7 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
   }
 });
 
-// POST /api/admin/users/:id/approve — approve a pending user (admin only)
+// POST /api/admin/users/:id/approve ï¿½ approve a pending user (admin only)
 app.post('/api/admin/users/:id/approve', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: 'Invalid user ID.' });
@@ -1141,7 +1189,7 @@ app.post('/api/admin/users/:id/approve', requireAdmin, async (req, res) => {
   }
 });
 
-// POST /api/admin/users/:id/reject — reject a user (admin only)
+// POST /api/admin/users/:id/reject ï¿½ reject a user (admin only)
 app.post('/api/admin/users/:id/reject', requireAdmin, async (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: 'Invalid user ID.' });
@@ -1157,8 +1205,8 @@ app.post('/api/admin/users/:id/reject', requireAdmin, async (req, res) => {
 });
 
 // --- Staff List ---------------------------------------------------------------
-// GET /api/staff/departments  — all departments with active staff count (ordered high ? low)
-// GET /api/staff/department/:id — active staff detail for one department
+// GET /api/staff/departments  ï¿½ all departments with active staff count (ordered high ? low)
+// GET /api/staff/department/:id ï¿½ active staff detail for one department
 app.use('/api/staff', requireAuth);
 
 app.get('/api/staff/departments', async (req, res) => {
@@ -1233,7 +1281,7 @@ app.use('/api/loan-detail',   requireAuth);
 // --- Start server -------------------------------------------------------------
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, async () => {
-  console.log(`SLA Dashboard backend running on port ${PORT} — mode: ${USE_MOCK ? 'MOCK DATA' : 'LIVE DATABASE'}`);
+  console.log(`SLA Dashboard backend running on port ${PORT} ï¿½ mode: ${USE_MOCK ? 'MOCK DATA' : 'LIVE DATABASE'}`);
 
   // Ensure IsRejected column exists (safe no-op if already present)
   if (!USE_MOCK) {
