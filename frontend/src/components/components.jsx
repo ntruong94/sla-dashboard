@@ -236,7 +236,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                           <div className="alert-task-row is-overdue" key={t.TaskID}>
                             <span className="alert-task-dot" />
                             <div className="alert-task-body">
-                              <div className="alert-task-title">{t.ShortDescription || `Task #${t.TaskID}`}</div>
+                              <div className="alert-task-title">{(t.StaffFullName && t.StaffFullName.trim()) ? t.StaffFullName : (t.ShortDescription || `Task #${t.TaskID}`)}</div>
                               <div className="alert-task-sub">
                                 #{t.TaskID}{t.OverDueComments ? ` · ${t.OverDueComments}` : ''}
                               </div>
@@ -253,7 +253,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                               <div className="alert-task-row is-atrisk" key={t.TaskID}>
                                 <span className="alert-task-dot" />
                                 <div className="alert-task-body">
-                                  <div className="alert-task-title">{t.ShortDescription || `Task #${t.TaskID}`}</div>
+                                  <div className="alert-task-title">{(t.StaffFullName && t.StaffFullName.trim()) ? t.StaffFullName : (t.ShortDescription || `Task #${t.TaskID}`)}</div>
                                   <div className="alert-task-sub">
                                     #{t.TaskID}{t.OverDueComments ? ` · ${t.OverDueComments}` : ''}
                                   </div>

@@ -39,7 +39,7 @@ const DEPT_TEAM_IDS = TEAMS.map(t => t.departmentId); // [101, 128, 10, 122, 86,
 // ─── Date helpers for KPI delta (vs previous business day) ───────────────────
 // TODAY_FIXED: override date for testing. Set to null to use real local clock.
 // Set to '2026-05-28' — last date with actual task data in the backed-up DB snapshot.
-const TODAY_FIXED = null;
+const TODAY_FIXED = '2026-05-28';
 // Returns today's date as YYYY-MM-DD using local clock (not UTC — avoids AEST off-by-one)
 function todayLocal() {
   if (TODAY_FIXED) return TODAY_FIXED;
@@ -382,6 +382,7 @@ const ENV_ORIGINS = (process.env.ALLOWED_ORIGINS || '')
 const DEFAULT_ORIGINS = [
   'https://sla.mezy.com.au',
   'https://sla-dashboard.vercel.app',
+  'https://sla-dashboard-prod.vercel.app',
   'https://sla-dashboard-git-main-mezyproject2026.vercel.app',
   'http://localhost:5173',
   'http://localhost:5174',
@@ -588,6 +589,7 @@ app.get('/api/tasks', async (req, res) => {
         CASE ${TEAM_NAME_CASE} END AS QueueName,
         t.AssignedTo,
         s.FirstName    AS AssignedToName,
+        RTRIM(ISNULL(s.FirstName,'')) + ' ' + RTRIM(ISNULL(s.Surname,'')) AS StaffFullName,
         CASE
           WHEN t.SLAInHours IS NULL OR t.SLAInHours = 0 THEN 'ok'
           WHEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > t.SLAInHours
@@ -841,7 +843,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
               THEN ROUND(DATEDIFF(MINUTE, t.SLAAdjustedDate, ${NOW_SQL}) / 60.0, 1)
             ELSE 0
           END AS overdueHours,
-          'overdue' AS taskType
+          'overdue' AS taskType,
+          RTRIM(ISNULL(s.FirstName,'')) + ' ' + RTRIM(ISNULL(s.Surname,'')) AS StaffFullName
         FROM Tasks t WITH (NOLOCK)
         ${staffJoin}
         WHERE t.TaskStatusID IN (1, 4, 5, 6)
@@ -860,7 +863,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
           t.SLAInHours,
           t.OverDueComments,
           0 AS overdueHours,
-          'atrisk' AS taskType
+          'atrisk' AS taskType,
+          RTRIM(ISNULL(s.FirstName,'')) + ' ' + RTRIM(ISNULL(s.Surname,'')) AS StaffFullName
         FROM Tasks t WITH (NOLOCK)
         ${staffJoin}
         WHERE t.TaskStatusID IN (1, 4, 5, 6)
