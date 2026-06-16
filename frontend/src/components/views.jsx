@@ -353,8 +353,9 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
 // Mini sparkline for reports
 const Sparkline = ({ data, color }) => {
   const W = 180, H = 36;
-  const min = 55, max = 100;
-  const xStep = W / (data.length - 1);
+  const min = Math.max(0,   Math.floor(Math.min(...data) / 10) * 10);
+  const max = Math.min(100, Math.ceil (Math.max(...data) / 10) * 10) || 100;
+  const xStep = W / Math.max(data.length - 1, 1);
   const yAt = v => H - ((v - min) / (max - min)) * (H - 4) - 2;
   const path = data.map((v, i) => `${i ? 'L' : 'M'}${(i*xStep).toFixed(1)},${yAt(v).toFixed(1)}`).join(' ');
   const area = `${path} L${W},${H} L0,${H} Z`;
