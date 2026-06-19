@@ -103,10 +103,7 @@ async function postAction(path) {
   return res.json();
 }
 
-export const getAdminUsers = ()   => request('/api/admin/users');
-export const approveUser   = (id) => postAction(`/api/admin/users/${id}/approve`);
-export const rejectUser    = (id) => postAction(`/api/admin/users/${id}/reject`);
-export const removeUser    = (id) => request(`/api/admin/users/${id}`, { method: 'DELETE' });
+export const getAdminUsers = () => request('/api/admin/users');
 
 export const getStaffDepartments  = ()       => request('/api/staff/departments');
 export const getStaffAbsentToday  = ()       => request('/api/staff/absent-today');

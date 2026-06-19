@@ -12,7 +12,7 @@
 **Database:** SQL Server — database name: `SEReport`
 **Status:** **Live** — backend connected to SQL Server (`DESKTOP-HGGDDCR`, DB `MySEReport`). All KPI tiles, team cards, and delta indicators show live SQL data. Servers: backend `http://localhost:5000`, frontend `http://localhost:5173`.
 
-**Admin account:** `ntruong@mezy.com.au` (role: `admin`, password: `123456789`). Only this account can access the User Management panel inside the dashboard to approve or reject user access requests.
+**Admin account:** Seeded automatically on first backend startup. Looks for `Staff.FirstName = 'System'` — uses that staff record's `EmailAddress` and default password `@dmin`. Only this account can access the User Management panel. Change the password after first login.
 
 ---
 
@@ -49,7 +49,8 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 | Tasks | `/tasks` | Full task list with team + status filters |
 | Reports | `/reports` | Historical SLA trend chart with date-range selector |
 | Alerts | `/alerts` | Active alerts grouped by severity (critical / warning) |
-| Settings | `/settings` | Per-team SLA target configuration || User Management | `/admin` | **Admin only** — approve / reject user access requests |
+| Settings | `/settings` | Per-team SLA target configuration |
+| User Management | `/admin` | **Admin only** — read-only list of registered users (email, role, joined, status) |
 | Staff List | `/staff-list` | All departments with active staff counts; click row to drill into staff members |
 ---
 
@@ -379,9 +380,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 | `/api/staff/departments` | GET | `[{ departmentId, departmentName, totalStaff }]` — all departments with active staff count (`EmployeeStatus = 1`), ordered high → low. DepartmentId IS NOT NULL filter applied. | StaffListView summary table |
 | `/api/staff/absent-today` | GET | `[{ staffId, fullName, departmentName, workStatusName, startedTime, endedTime }]` — all staff absent today (`ConfigWorkStatus.IsAbsent = 1`) where `WorkStatusHistory.StartedTime` is in today range (`>= today` and `< next day`). | StaffListView “Absent Today” table |
 | `/api/staff/department/:id` | GET | `[{ staffId, fullName, employeeStatus, isGroup }]` — active staff (EmployeeStatus=1, non-null name) in one department, ordered by name. | StaffListView drill-through modal |
-| `/api/admin/users` | GET | `[{ id, email, companyName, role, status, createdAt }]` — status: `pending\|approved\|rejected`. **Admin JWT required.** | AdminView user list |
-| `/api/admin/users/:id/approve` | POST | `{ message }` — sets `IsApproved=1, IsRejected=0`. **Admin JWT required.** | AdminView approve button |
-| `/api/admin/users/:id/reject` | POST | `{ message }` — sets `IsApproved=0, IsRejected=1`. **Admin JWT required.** | AdminView reject button |
+| `/api/admin/users` | GET | `[{ id, email, companyName, role, status, createdAt }]` — status: `approved`. **Admin JWT required.** | AdminView user list |
 | `/api/auth/forgot-password` | POST | `{ token, expiresIn }` — generates a 1-hour reset token stored in DB, returns it directly (no email infra). 404 if email not found/not approved. | Login "Lost password" flow |
 | `/api/auth/reset-password` | POST | `{ message }` — validates token, checks expiry, updates `PasswordHash`, clears token. 400 on invalid/expired token. | Login "Set new password" form |
 

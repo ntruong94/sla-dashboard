@@ -1334,9 +1334,14 @@ app.post('/api/auth/signup', authLimiter, express.json(), async (req, res) => {
               VALUES (@staffId, @hash, GETDATE())`);
     const userId = newUser.recordset[0].UserId;
     // Auto-approve: grant viewer access immediately — no admin approval required
+    // Resolve the actual dashboard ID from ConfigDashboards
+    const cdLookup = await pool.request().query(
+      `SELECT TOP 1 DashboardID FROM ConfigDashboards WHERE IsActive = 1 ORDER BY DashboardID`
+    );
+    const dashId = cdLookup.recordset.length ? cdLookup.recordset[0].DashboardID : SLA_DASHBOARD_ID;
     await pool.request()
       .input('userId', sql.Int, userId)
-      .input('dashId', sql.Int, SLA_DASHBOARD_ID)
+      .input('dashId', sql.Int, dashId)
       .query(`INSERT INTO DashboardAccess (ConfigDashboardId, UserId, Role, IsActive)
               VALUES (@dashId, @userId, 'viewer', 1)`);
     res.json({ message: 'Signup successful. You can now log in.' });
@@ -1420,69 +1425,6 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
       status:      u.IsActive == null ? 'pending' : (u.IsActive ? 'approved' : 'rejected'),
       createdAt:   u.CreatedAt,
     })));
-  } catch (err) {
-    sendError(res, 500, 'Internal server error', err);
-  }
-});
-
-// POST /api/admin/users/:id/approve � approve a pending user (admin only)
-app.post('/api/admin/users/:id/approve', requireAdmin, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (!id) return res.status(400).json({ error: 'Invalid user ID.' });
-  try {
-    const pool = await connectDB();
-    // Upsert DashboardAccess — grant active access to this dashboard
-    await pool.request()
-      .input('id',     sql.Int, id)
-      .input('dashId', sql.Int, SLA_DASHBOARD_ID)
-      .query(`IF EXISTS (SELECT 1 FROM DashboardAccess WHERE UserId = @id AND ConfigDashboardId = @dashId)
-                UPDATE DashboardAccess SET IsActive = 1
-                WHERE UserId = @id AND ConfigDashboardId = @dashId
-              ELSE
-                INSERT INTO DashboardAccess (ConfigDashboardId, UserId, Role, IsActive)
-                VALUES (@dashId, @id, 'viewer', 1)`);
-    res.json({ message: 'User approved.' });
-  } catch (err) {
-    sendError(res, 500, 'Internal server error', err);
-  }
-});
-
-// DELETE /api/admin/users/:id — permanently remove a user’s registration (admin only)
-app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (!id) return res.status(400).json({ error: 'Invalid user ID.' });
-  try {
-    const pool = await connectDB();
-    // Remove access rows first (FK), then the user row
-    await pool.request()
-      .input('id', sql.Int, id)
-      .query('DELETE FROM DashboardAccess WHERE UserId = @id');
-    await pool.request()
-      .input('id', sql.Int, id)
-      .query('DELETE FROM ConfigReportUsers WHERE UserId = @id');
-    res.json({ message: 'User removed.' });
-  } catch (err) {
-    sendError(res, 500, 'Internal server error', err);
-  }
-});
-
-// POST /api/admin/users/:id/reject — reject a user (admin only)
-app.post('/api/admin/users/:id/reject', requireAdmin, async (req, res) => {
-  const id = parseInt(req.params.id, 10);
-  if (!id) return res.status(400).json({ error: 'Invalid user ID.' });
-  try {
-    const pool = await connectDB();
-    // Upsert DashboardAccess — revoke access to this dashboard
-    await pool.request()
-      .input('id',     sql.Int, id)
-      .input('dashId', sql.Int, SLA_DASHBOARD_ID)
-      .query(`IF EXISTS (SELECT 1 FROM DashboardAccess WHERE UserId = @id AND ConfigDashboardId = @dashId)
-                UPDATE DashboardAccess SET IsActive = 0
-                WHERE UserId = @id AND ConfigDashboardId = @dashId
-              ELSE
-                INSERT INTO DashboardAccess (ConfigDashboardId, UserId, Role, IsActive)
-                VALUES (@dashId, @id, 'viewer', 0)`);
-    res.json({ message: 'User rejected.' });
   } catch (err) {
     sendError(res, 500, 'Internal server error', err);
   }
@@ -1620,16 +1562,22 @@ app.listen(PORT, async () => {
       `);
       console.log('[startup] auth tables verified (ConfigReportUsers, ConfigDashboards, DashboardAccess).');
 
-      // ── Step 1: Seed ConfigDashboards (DashboardID=1) if empty ──────────────
+      // ── Step 1: Seed ConfigDashboards if empty — capture the real generated ID ─
+      let seedDashId = SLA_DASHBOARD_ID;
       try {
-        const cdCount = await pool.request().query('SELECT COUNT(*) AS n FROM ConfigDashboards');
-        if (cdCount.recordset[0].n === 0) {
-          await pool.request().query(
-            `SET IDENTITY_INSERT ConfigDashboards ON;
-             INSERT INTO ConfigDashboards (DashboardID, Name, IsActive) VALUES (1, 'SLA Dashboard', 1);
-             SET IDENTITY_INSERT ConfigDashboards OFF`
+        const cdRow = await pool.request().query(
+          `SELECT TOP 1 DashboardID FROM ConfigDashboards WHERE Name = 'SLA Dashboard'`
+        );
+        if (cdRow.recordset.length) {
+          seedDashId = cdRow.recordset[0].DashboardID;
+        } else {
+          const inserted = await pool.request().query(
+            `INSERT INTO ConfigDashboards (Name, IsActive)
+             OUTPUT INSERTED.DashboardID
+             VALUES ('SLA Dashboard', 1)`
           );
-          console.log('[startup] seeded ConfigDashboards: SLA Dashboard (ID=1)');
+          seedDashId = inserted.recordset[0].DashboardID;
+          console.log('[startup] seeded ConfigDashboards: SLA Dashboard (ID=' + seedDashId + ')');
         }
       } catch (e) {
         console.warn('[startup] ConfigDashboards seed skipped:', e.message);
@@ -1646,19 +1594,22 @@ app.listen(PORT, async () => {
         if (!existing.recordset.length) {
           // Look for an existing Staff record with FirstName = 'System'
           let staffId;
+          let adminEmail = 'system@admin.local';
           const sysStaff = await pool.request().query(
-            `SELECT TOP 1 StaffID FROM Staff WHERE FirstName = 'System'`
+            `SELECT TOP 1 StaffID, ISNULL(EmailAddress,'system@admin.local') AS EmailAddress FROM Staff WHERE FirstName = 'System'`
           );
           if (sysStaff.recordset.length) {
-            staffId = sysStaff.recordset[0].StaffID;
-            console.log('[startup] found existing System staff, StaffID =', staffId);
+            staffId    = sysStaff.recordset[0].StaffID;
+            adminEmail = sysStaff.recordset[0].EmailAddress;
+            console.log('[startup] found existing System staff, StaffID =', staffId, '| email:', adminEmail);
           } else {
             // StaffID is NOT IDENTITY — reserve -1 for system account
             await pool.request().query(
               `INSERT INTO Staff (StaffID, FirstName, Surname, EmailAddress, OfficeId, EmployeeStatus, IsGroup)
                VALUES (-1, 'System', 'Admin', 'system@admin.local', 0, 1, 0)`
             );
-            staffId = -1;
+            staffId    = -1;
+            adminEmail = 'system@admin.local';
             console.log('[startup] created System staff record (StaffID=-1)');
           }
 
@@ -1677,11 +1628,11 @@ app.listen(PORT, async () => {
           // Grant admin access in DashboardAccess
           await pool.request()
             .input('userId', sql.Int, userId)
-            .input('dashId', sql.Int, SLA_DASHBOARD_ID)
+            .input('dashId', sql.Int, seedDashId)
             .query(`INSERT INTO DashboardAccess (ConfigDashboardId, UserId, Role, IsActive)
                     VALUES (@dashId, @userId, 'admin', 1)`);
 
-          console.log('[startup] seeded system admin — email: system@admin.local  password: @dmin');
+          console.log('[startup] seeded system admin — email:', adminEmail, ' password: @dmin');
           console.log('[startup] *** Change this password after first login ***');
         } else {
           console.log('[startup] system admin already exists — seed skipped.');

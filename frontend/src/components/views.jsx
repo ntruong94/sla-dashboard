@@ -5,7 +5,7 @@ import { AlertsPanel, InfoTip } from './components.jsx';
 import { fmtHMS } from './utils.js';
 import { TEAM_COLORS, slaClass, slaLabel, TOOLTIPS } from '../constants.js';
 import { activeTeams } from '../chartUtils.js';
-import { getAdminUsers, approveUser, rejectUser, removeUser, getStaffDepartments, getStaffAbsentToday, getStaffByDepartment } from '../api.js';
+import { getAdminUsers, getStaffDepartments, getStaffAbsentToday, getStaffByDepartment } from '../api.js';
 
 // Additional views for sidebar nav routing
 
@@ -928,11 +928,9 @@ function StaffListView() {
 
 // ===== ADMIN VIEW — user approval management (admin only) =====
 function AdminView() {
-  const [users, setUsers]       = React.useState([]);
-  const [loading, setLoading]   = React.useState(true);
-  const [error, setError]       = React.useState('');
-  const [busy, setBusy]         = React.useState({}); // { [userId]: 'approving' | 'rejecting' }
-  const [msgs, setMsgs]         = React.useState({}); // { [userId]: 'approved' | 'rejected' | 'error' }
+  const [users, setUsers]     = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError]     = React.useState('');
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -944,55 +942,13 @@ function AdminView() {
 
   React.useEffect(() => { load(); }, [load]);
 
-  const doApprove = async (id) => {
-    setBusy(b => ({ ...b, [id]: 'approving' }));
-    try {
-      await approveUser(id);
-      setMsgs(m => ({ ...m, [id]: 'approved' }));
-      setUsers(us => us.map(u => u.id === id ? { ...u, status: 'approved' } : u));
-    } catch {
-      setMsgs(m => ({ ...m, [id]: 'error' }));
-    } finally {
-      setBusy(b => ({ ...b, [id]: null }));
-    }
-  };
-
-  const doReject = async (id) => {
-    setBusy(b => ({ ...b, [id]: 'rejecting' }));
-    try {
-      await rejectUser(id);
-      setMsgs(m => ({ ...m, [id]: 'rejected' }));
-      setUsers(us => us.map(u => u.id === id ? { ...u, status: 'rejected' } : u));
-    } catch {
-      setMsgs(m => ({ ...m, [id]: 'error' }));
-    } finally {
-      setBusy(b => ({ ...b, [id]: null }));
-    }
-  };
-
-  const doRemove = async (id) => {
-    if (!window.confirm('Permanently remove this user? They will need to sign up again.')) return;
-    setBusy(b => ({ ...b, [id]: 'removing' }));
-    try {
-      await removeUser(id);
-      setUsers(us => us.filter(u => u.id !== id));
-    } catch {
-      setMsgs(m => ({ ...m, [id]: 'error' }));
-    } finally {
-      setBusy(b => ({ ...b, [id]: null }));
-    }
-  };
-
   const STATUS_STYLE = {
     pending:  { background: 'color-mix(in srgb, var(--warn) 18%, transparent)', color: 'var(--warn)',  fontWeight: 600 },
     approved: { background: 'color-mix(in srgb, var(--ok)   18%, transparent)', color: 'var(--ok)',   fontWeight: 600 },
     rejected: { background: 'color-mix(in srgb, var(--bad)  18%, transparent)', color: 'var(--bad)',  fontWeight: 600 },
   };
 
-  // Admin accounts are self-managed — exclude from all approval/rejection lists
   const nonAdmin = users.filter(u => u.role !== 'admin');
-  const pending  = nonAdmin.filter(u => u.status === 'pending');
-  const rest     = nonAdmin.filter(u => u.status !== 'pending');
 
   return (
     <main className="content">
@@ -1038,7 +994,6 @@ function AdminView() {
                   <th>Role</th>
                   <th>Joined</th>
                   <th style={{ textAlign: 'center' }}>Status</th>
-                  <th style={{ textAlign: 'right' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1049,18 +1004,8 @@ function AdminView() {
                     <td className="soft">{new Date(u.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
                     <td style={{ textAlign: 'center' }}>
                       <span style={{ ...STATUS_STYLE[u.status], padding: '2px 10px', borderRadius: 10, fontSize: 12, textTransform: 'capitalize' }}>
-                        {msgs[u.id] === 'error' ? 'Error' : u.status}
+                        {u.status}
                       </span>
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <button
-                        className="btn-secondary"
-                        style={{ padding: '5px 14px', fontSize: 12 }}
-                        disabled={!!busy[u.id]}
-                        onClick={() => doRemove(u.id)}
-                      >
-                        {busy[u.id] === 'removing' ? 'Removing…' : 'Remove'}
-                      </button>
                     </td>
                   </tr>
                 ))}
