@@ -576,7 +576,7 @@ export default function App() {
 
         {/* â”€â”€ Secondary views (each manages its own <main className="content">) â”€â”€ */}
         {view === 'teams'   && <TeamsView teams={teamsDisplay} onOpenTeam={setModalTeamId}/>}
-        {view === 'tasks'   && <TasksView teams={teamsDisplay} tasks={tasksByTeam}/>}
+        {view === 'tasks'   && <TasksView teams={teamsDisplay} tasks={modalTasksByTeam}/>}
         {view === 'reports' && (
           <ReportsView
             teams={teamsDisplay}

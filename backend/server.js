@@ -1236,7 +1236,8 @@ app.get('/api/loan-detail/:type', async (req, res) => {
     const result = await pool.request().query(`
       SELECT
         ApplicationID,
-        ISNULL(FunderName, '�')                       AS FunderName,
+        CONVERT(varchar(10), ${col}, 120)             AS MilestoneDate,
+        ISNULL(FunderName, '—')                       AS FunderName,
         ISNULL(CAST(LoanAmount AS DECIMAL(18,2)), 0)  AS LoanAmount
       FROM Loans WITH (NOLOCK)
       WHERE ${col} >= '${today}' AND ${col} < '${todayNext}'

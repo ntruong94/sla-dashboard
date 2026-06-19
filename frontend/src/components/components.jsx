@@ -632,6 +632,7 @@ export const LoanModal = ({ label, loans = [], loading, error, onClose }) => {
             <table className="task-table">
               <thead>
                 <tr>
+                  <th style={{ width: '110px' }}>Date</th>
                   <th style={{ width: '130px' }}>Application ID</th>
                   <th>Funder Name</th>
                   <th style={{ width: '160px', textAlign: 'right' }}>Loan Amount</th>
@@ -640,6 +641,7 @@ export const LoanModal = ({ label, loans = [], loading, error, onClose }) => {
               <tbody>
                 {loans.map(row => (
                   <tr key={row.ApplicationID}>
+                    <td style={{ fontSize: '12px', fontVariantNumeric: 'tabular-nums' }}>{row.MilestoneDate || '—'}</td>
                     <td><span className="task-id">#{row.ApplicationID}</span></td>
                     <td style={{fontSize: '12px'}}>{row.FunderName || '—'}</td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, fontSize: '12px' }}>

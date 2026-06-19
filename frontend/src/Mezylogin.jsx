@@ -135,10 +135,7 @@ export default function Mezylogin({ onLogin }) {
       setError('Please enter your email and password.');
       return;
     }
-    if (mode === 'signup' && !companyName.trim()) {
-      setError('Please enter your company name.');
-      return;
-    }
+
 
     setBusy(true);
     try {
@@ -241,19 +238,7 @@ export default function Mezylogin({ onLogin }) {
           </div>
           )}
 
-          {/* Company name — signup only */}
-          {mode === 'signup' && (
-            <div className="mezy-field" style={{ marginBottom: 20, animationDelay: '1.08s' }}>
-              <label className="mezy-label">Company Name</label>
-              <input
-                type="text"
-                autoComplete="organization"
-                value={companyName}
-                onChange={e => { setCompany(e.target.value); setError(''); }}
-                className="mezy-input"
-              />
-            </div>
-          )}
+
 
           {/* Reset code + new password fields — reset mode only */}
           {isReset && (
