@@ -357,6 +357,11 @@ export default function App() {
   const timeFmt    = now.toLocaleTimeString('en-AU', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Australia/Sydney' });
   const dateFmt    = now.toLocaleDateString('en-AU',  { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Australia/Sydney' });
   const refreshFmt = lastRefresh.toLocaleTimeString('en-AU', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Australia/Sydney' });
+  // Reporting date: the latest data date returned by the backend (kpi.deltas.today).
+  // Falls back to local calendar date if KPI data isn't loaded yet.
+  const reportingDateFmt = kpi?.deltas?.today
+    ? new Date(kpi.deltas.today + 'T00:00:00').toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' })
+    : dateFmt;
 
   // Auth gate — render login if not authenticated
   if (!authed) return <Mezylogin onLogin={handleLogin} />;
@@ -441,7 +446,7 @@ export default function App() {
           <div className="refresh-stamp">
             <span className="label">Last refresh (AEST)</span>
             <span className="time mono" style={{ opacity: justRefreshed ? 0.5 : 1, transition: 'opacity .3s' }}>
-              {refreshFmt} &middot; {dateFmt}
+              {refreshFmt} &middot; Data as of {reportingDateFmt}
             </span>
           </div>
           <button

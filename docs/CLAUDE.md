@@ -439,7 +439,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 
 6. **`react-router-dom`** — Not yet installed. Run `cd frontend && npm install react-router-dom` when routing is needed.
 
-7. **`TODAY_FIXED` date** — Set to `'2026-05-28'` (last date with actual task data in the backed-up DB snapshot — 2026-05-29 has 0 tasks). `todayLocal()` returns `TODAY_FIXED` when set; otherwise falls back to real local clock. `computeDates()` returns `{ today, prev, todayNext, prevNext }` on every cache refresh.
+7. ~~**`TODAY_FIXED` hardcoded date**~~ — **DONE** (2026-06-19). Replaced with dynamic `resolveEffectiveDate()` that queries `MAX(DateCreated)` from `Tasks` on startup and every 60 min. `todayLocal()` returns `_effectiveDate` (set by the resolver) or falls back to the real system date. All calculations use the reporting date automatically. See Section 28.
 
 8. ~~**Loan summary strip**~~ — **DONE** (`/api/loan-summary` + `LoanKpiTile` component, 3 cards above KPI row with count, total amount, and deltas).
 
@@ -480,7 +480,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 - [x] Create `/api/alerts` endpoint (rule-based from breach thresholds)
 - [ ] Final end-to-end testing with real data
 - [ ] Verify all view filters work correctly
-- [x] `TODAY_FIXED` set to `'2026-05-29'` (backed-up DB snapshot) — set to `null` when connecting to live data
+- [x] ~~`TODAY_FIXED` hardcoded~~ — replaced with `resolveEffectiveDate()` (dynamic MAX DateCreated from DB)
 
 ### Phase 6 — Loan Strip & Drill-down (2026-06-03)
 - [x] Add `/api/loan-summary` endpoint — count + total `LoanAmount` for received/approved/settled, with deltas vs prev biz day

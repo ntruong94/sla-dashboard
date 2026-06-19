@@ -54,18 +54,51 @@ const TEAMS = [
 ];
 const DEPT_TEAM_IDS = TEAMS.filter(t => t.departmentId).map(t => t.departmentId); // [101,110,86,122,12,10]
 
-// --- Date helpers for KPI delta (vs previous business day) -------------------
-// TODAY_FIXED: override date for testing. Set to null to use real local clock.
-// Set to '2026-05-28' � last date with actual task data in the backed-up DB snapshot.
-const TODAY_FIXED = '2026-05-28';
-// Returns today's date as YYYY-MM-DD using local clock (not UTC � avoids AEST off-by-one)
-function todayLocal() {
-  if (TODAY_FIXED) return TODAY_FIXED;
+// --- Effective reporting date -----------------------------------------------
+// The dashboard operates against a reporting DB refreshed nightly from the live
+// server.  ALL business calculations use the LATEST available date in that DB,
+// not the real system calendar date.
+//
+// _effectiveDate is resolved at startup (and every 60 min) by querying
+// MAX(DateCreated) from Tasks.  Falls back to system today if the query fails.
+let _effectiveDate = null;
+
+// Real system clock (YYYY-MM-DD local). Used ONLY inside getNowSql().
+function systemTodayLocal() {
   const d = new Date();
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+// Effective reporting date for all business calculations.
+// Falls back to real system date until resolveEffectiveDate() completes.
+function todayLocal() {
+  return _effectiveDate || systemTodayLocal();
+}
+
+// Query MAX(DateCreated) from Tasks and cache as _effectiveDate.
+// Refreshed every 60 min so the date advances when the DB refreshes.
+async function resolveEffectiveDate() {
+  try {
+    const pool   = await connectDB();
+    const result = await pool.request().query(
+      `SELECT CONVERT(varchar(10), MAX(DateCreated), 120) AS maxDate
+       FROM Tasks WITH (NOLOCK) WHERE DateCreated IS NOT NULL`
+    );
+    const maxDate = result.recordset[0]?.maxDate;
+    if (maxDate) {
+      _effectiveDate = maxDate;
+      console.log(`[reporting date] effective date: ${_effectiveDate}`);
+    } else {
+      _effectiveDate = systemTodayLocal();
+      console.log('[reporting date] no task data, using system date: ' + _effectiveDate);
+    }
+  } catch (err) {
+    if (!_effectiveDate) _effectiveDate = systemTodayLocal();
+    console.warn('[reporting date] resolution failed, keeping:', _effectiveDate, err.message);
+  }
 }
 function prevBizDay(dateStr) {
   const d   = new Date(dateStr + 'T00:00:00');
@@ -147,22 +180,17 @@ function buildTargetExpr(customTargets) {
   return `CASE ${cases.join(' ')} ELSE t.SLAInHours END`;
 }
 
-// --- TAT SQL expressions ------------------------------------------------------
-// NOW_SQL: the SQL expression used as "current time" in open-task TAT calculations.
-// When TODAY_FIXED is set (snapshot DB), we use the end of the snapshot day so that
-// TAT is measured within the snapshot day, not against real time weeks later.
-// In live mode (TODAY_FIXED = null), GETDATE() is the correct real-time reference.
-const NOW_SQL = TODAY_FIXED
-  ? `CAST('${nextDay(TODAY_FIXED)}' AS DATETIME)`
-  : `GETDATE()`;
-
-// Elapsed hours for OPEN (active) tasks � real-time: NOW_SQL minus creation time.
-// Use for all overdue / at-risk / avgTat calculations on active tasks.
-const OPEN_TAT_EXPR   = `DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0`;
-// Elapsed hours for CLOSED (completed) tasks � DateCompleted minus DateCreated.
-// Use for SLA compliance checks and avgTat on completed tasks.
-const CLOSED_TAT_EXPR = `DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0`;
-
+// --- TAT SQL expression helper -----------------------------------------------
+// Snapshot/reporting mode (effective date < system today):
+//   CAST('<effective+1>' AS DATETIME) measures TAT within the reporting day.
+// Live mode (effective date = system today): GETDATE() gives real-time TAT.
+function getNowSql() {
+  const effective = todayLocal();
+  const sysToday  = systemTodayLocal();
+  return effective < sysToday
+    ? `CAST('${nextDay(effective)}' AS DATETIME)`
+    : 'GETDATE()';
+}
 // Set to true to serve mock data without a DB connection.
 // Switch to false once SQL Server TCP/IP is enabled (see db-health endpoint).
 const USE_MOCK = false;
@@ -194,6 +222,7 @@ function getCached(key, fetchFn) {
 }
 
 async function fetchKpiData(customTargets = {}) {
+  const NOW_SQL = getNowSql();
   const pool = await connectDB();
   const { today, prev, todayNext, prevNext } = computeDates();
   const targetExpr = buildTargetExpr(customTargets);
@@ -297,6 +326,7 @@ async function fetchKpiData(customTargets = {}) {
 }
 
 async function fetchTeamsData(customTargets = {}) {
+  const NOW_SQL = getNowSql();
   const pool = await connectDB();
   const { today, prev, todayNext, prevNext } = computeDates();
   const targetExpr = buildTargetExpr(customTargets);
@@ -728,6 +758,7 @@ app.get('/api/teams', async (req, res) => {
 // Returns array of task objects matching the mock-data shape.
 app.get('/api/tasks', async (req, res) => {
   const { team, status, scope } = req.query;
+  const NOW_SQL = getNowSql();
 
   if (USE_MOCK) {
     let tasks = mock.TASKS.filter(t => t.TaskStatusID === 1);
@@ -856,7 +887,7 @@ async function fetchHistoryData(range = '90d', customTargets = {}) {
   const request = pool.request();
   // No explicit timeout � inherits 180s from db.js (needed for cold-start full scan)
   const targetExpr = buildTargetExpr(customTargets);
-  const refDate = TODAY_FIXED ? new Date(TODAY_FIXED + 'T00:00:00') : new Date();
+  const refDate = new Date(todayLocal() + 'T00:00:00');
   request.input('startDate', sql.DateTime, new Date(refDate.getTime() - days * 24 * 60 * 60 * 1000));
   const result = await request.query(`
       SELECT
@@ -983,6 +1014,7 @@ app.get('/api/alerts', async (req, res) => {
   }
   try {
     const pool   = await connectDB();
+    const NOW_SQL = getNowSql();
     const { today, todayNext } = computeDates();
     const alertTargets = parseTargets(req.query);
     const alertTargetExpr = buildTargetExpr(alertTargets);
@@ -1019,6 +1051,7 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
   const teamId  = parseInt(req.params.teamId, 10);
   const teamDef = TEAMS.find(t => t.id === teamId);
   if (!teamDef) return res.status(404).json({ error: 'Team not found' });
+  const NOW_SQL = getNowSql();
   const { today, todayNext } = computeDates();
 
   // atRiskFraction: clamped to [0.50, 0.99] to prevent nonsensical values
@@ -1651,6 +1684,10 @@ app.listen(PORT, async () => {
   // long-running cold-disk queries simultaneously, which can crash the process.
   if (!USE_MOCK) {
     (async () => {
+      // Resolve effective reporting date before warming caches.
+      await resolveEffectiveDate();
+      setInterval(resolveEffectiveDate, 60 * 60 * 1000);
+
       const warmups = [
         ['kpi',     fetchKpiData],
         ['teams',   fetchTeamsData],
