@@ -775,10 +775,11 @@ app.get('/api/tasks', async (req, res) => {
         RTRIM(ISNULL(cb.FirstName,'') + ISNULL(' ' + cb.Surname, '')) AS CreatedByFullName,
         ISNULL(cb.IsGroup, 0) AS CreatedByIsGroup,
         ISNULL(cls.Name, '') AS ConfigLoanStatusName,
+        -- RealtimeTAT: elapsed hours from creation to NOW_SQL (real-time for open tasks)
+        DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 AS RealtimeTAT,
         CASE
-          WHEN t.SLAInHours IS NULL OR t.SLAInHours = 0 THEN 'ok'
-          WHEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > t.SLAInHours THEN 'bad'
-          WHEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 >= t.SLAInHours * ${atRiskFraction} THEN 'warn'
+          WHEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ISNULL(NULLIF(t.SLAInHours, 0), 4) THEN 'bad'
+          WHEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 >= ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction} THEN 'warn'
           ELSE 'ok'
         END AS status
       FROM Tasks t WITH (NOLOCK)
@@ -804,11 +805,11 @@ app.get('/api/tasks', async (req, res) => {
       }
     }
     if (status === 'ok') {
-      query += ` AND (t.SLAInHours IS NULL OR t.SLAInHours = 0 OR DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 < t.SLAInHours * ${atRiskFraction})`;
+      query += ` AND DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 < ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction}`;
     } else if (status === 'warn') {
-      query += ` AND DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 >= t.SLAInHours * ${atRiskFraction} AND DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 <= t.SLAInHours AND (t.SLAAdjustedDate IS NULL OR ${NOW_SQL} <= t.SLAAdjustedDate)`;
+      query += ` AND DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 >= ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction} AND DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 <= ISNULL(NULLIF(t.SLAInHours, 0), 4) AND (t.SLAAdjustedDate IS NULL OR ${NOW_SQL} <= t.SLAAdjustedDate)`;
     } else if (status === 'bad') {
-      query += ` AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > t.SLAInHours OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))`;
+      query += ` AND DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ISNULL(NULLIF(t.SLAInHours, 0), 4)`;
     }
     if (scope === 'today') {
       query += ` AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'`;

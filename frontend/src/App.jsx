@@ -31,8 +31,9 @@ function fmtHMS(hours) {
 const DEFAULT_SETTINGS = { targets: {}, refreshMin: 5, atRiskPct: 87.5, modalTaskCount: 10, loanTargets: { received: 10, approved: 10, settled: 10 } };
 
 function normalizeTask(t, settings = {}) {
-  const tatH    = t.TotalHoursOnTask ?? 0;
-  const baseSla = t.SLAInHours ?? 4;
+  // Use RealtimeTAT (DATEDIFF computed in SQL) when available; fall back to stored TotalHoursOnTask.
+  const tatH    = t.RealtimeTAT != null ? t.RealtimeTAT : (t.TotalHoursOnTask ?? 0);
+  const baseSla = t.SLAInHours || 4;          // fall back to 4h if NULL/0
   const slaH    = settings.targets?.[t.QueueId] || baseSla;
   const atRisk  = (settings.atRiskPct ?? 87.5) / 100;
   const pct     = slaH > 0 ? tatH / slaH : 0;
