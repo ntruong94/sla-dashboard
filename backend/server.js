@@ -1612,6 +1612,57 @@ app.listen(PORT, async () => {
           RAISERROR('DashboardAccess table not found. Run sql/create_new_auth_tables.sql first.', 16, 1);
       `);
       console.log('[startup] auth tables verified (ConfigReportUsers, ConfigDashboards, DashboardAccess).');
+
+      // Seed default system admin if system@admin.local account doesn't exist yet
+      try {
+        const existing = await pool.request().query(
+          `SELECT TOP 1 cru.UserId FROM ConfigReportUsers cru
+           INNER JOIN Staff s ON cru.StaffId = s.StaffID
+           WHERE s.EmailAddress = 'system@admin.local'`
+        );
+
+        if (!existing.recordset.length) {
+          // Find or create a Staff record for the system account
+          let staffId;
+          const sysStaff = await pool.request().query(
+            `SELECT TOP 1 StaffID FROM Staff WHERE FirstName = 'System' AND EmailAddress = 'system@admin.local'`
+          );
+          if (sysStaff.recordset.length) {
+            staffId = sysStaff.recordset[0].StaffID;
+          } else {
+            // StaffID is NOT IDENTITY — use -1 as reserved system account
+            await pool.request().query(
+              `INSERT INTO Staff (StaffID, FirstName, Surname, EmailAddress, OfficeId, EmployeeStatus, IsGroup)
+               VALUES (-1, 'System', 'Admin', 'system@admin.local', 0, 1, 0)`
+            );
+            staffId = -1;
+          }
+
+          // Hash the default password
+          const defaultHash = await bcrypt.hash('@dmin', 12);
+
+          // Insert ConfigReportUsers
+          const newUser = await pool.request()
+            .input('staffId', sql.Int,           staffId)
+            .input('hash',    sql.NVarChar(sql.MAX), defaultHash)
+            .query(`INSERT INTO ConfigReportUsers (StaffId, PasswordHash, CreatedAt)
+                    OUTPUT INSERTED.UserId
+                    VALUES (@staffId, @hash, GETDATE())`);
+          const userId = newUser.recordset[0].UserId;
+
+          // Grant admin access
+          await pool.request()
+            .input('userId', sql.Int, userId)
+            .input('dashId', sql.Int, SLA_DASHBOARD_ID)
+            .query(`INSERT INTO DashboardAccess (ConfigDashboardId, UserId, Role, IsActive)
+                    VALUES (@dashId, @userId, 'admin', 1)`);
+
+          console.log('[startup] seeded default system admin — email: system@admin.local  password: @dmin');
+          console.log('[startup] *** Change this password after first login ***');
+        }
+      } catch (e) {
+        console.warn('[startup] system admin seed skipped:', e.message);
+      }
     } catch (e) {
       console.warn('[startup] auth table check:', e.message);
     }
