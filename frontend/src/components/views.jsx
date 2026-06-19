@@ -1000,7 +1000,7 @@ function AdminView() {
         <div>
           <div className="crumb">Admin</div>
           <h1 className="page-title">User Management</h1>
-          <div className="page-sub">Approve or reject dashboard access requests</div>
+          <div className="page-sub">Manage dashboard user access</div>
         </div>
         <button className="btn-secondary" onClick={load} style={{ marginLeft: 'auto' }}>
           Refresh
@@ -1021,145 +1021,53 @@ function AdminView() {
       )}
 
       {!loading && !error && (
-        <>
-          {/* Pending section */}
-          <section className="trend-card" style={{ padding: '22px 26px', marginBottom: 20 }}>
-            <h2 className="section-title" style={{ marginBottom: 4 }}>
-              Pending Approval
-              {pending.length > 0 && (
-                <span style={{ marginLeft: 10, fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: 'color-mix(in srgb, var(--warn) 20%, transparent)', color: 'var(--warn)' }}>
-                  {pending.length}
-                </span>
-              )}
-            </h2>
-            <div className="section-sub" style={{ marginBottom: 18 }}>Users awaiting review</div>
-
-            {pending.length === 0 ? (
-              <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
-                ✓ No pending requests
-              </div>
-            ) : (
-              <table className="teams-table">
-                <thead>
-                  <tr>
-                    <th>Email</th>
-                    <th>Requested</th>
-                    <th style={{ textAlign: 'center' }}>Status</th>
-                    <th style={{ textAlign: 'right' }}>Actions</th>
+        <section className="trend-card" style={{ padding: '22px 26px' }}>
+          <h2 className="section-title" style={{ marginBottom: 4 }}>All Users</h2>
+          <div className="section-sub" style={{ marginBottom: 18 }}>
+            {nonAdmin.length} registered user{nonAdmin.length !== 1 ? 's' : ''}
+          </div>
+          {nonAdmin.length === 0 ? (
+            <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+              No users registered yet.
+            </div>
+          ) : (
+            <table className="teams-table">
+              <thead>
+                <tr>
+                  <th>Email</th>
+                  <th>Role</th>
+                  <th>Joined</th>
+                  <th style={{ textAlign: 'center' }}>Status</th>
+                  <th style={{ textAlign: 'right' }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nonAdmin.map(u => (
+                  <tr key={u.id}>
+                    <td><strong>{u.email}</strong></td>
+                    <td><span className="dept-tag">{u.role}</span></td>
+                    <td className="soft">{new Date(u.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
+                    <td style={{ textAlign: 'center' }}>
+                      <span style={{ ...STATUS_STYLE[u.status], padding: '2px 10px', borderRadius: 10, fontSize: 12, textTransform: 'capitalize' }}>
+                        {msgs[u.id] === 'error' ? 'Error' : u.status}
+                      </span>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        className="btn-secondary"
+                        style={{ padding: '5px 14px', fontSize: 12 }}
+                        disabled={!!busy[u.id]}
+                        onClick={() => doRemove(u.id)}
+                      >
+                        {busy[u.id] === 'removing' ? 'Removing…' : 'Remove'}
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {pending.map(u => (
-                    <tr key={u.id}>
-                      <td><strong>{u.email}</strong></td>
-                      <td className="soft">{new Date(u.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span style={{ ...STATUS_STYLE[u.status], padding: '2px 10px', borderRadius: 10, fontSize: 12, textTransform: 'capitalize' }}>
-                          {msgs[u.id] === 'error' ? 'Error' : u.status}
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                          <button
-                            className="btn-primary"
-                            style={{ padding: '5px 14px', fontSize: 12 }}
-                            disabled={!!busy[u.id]}
-                            onClick={() => doApprove(u.id)}
-                          >
-                            {busy[u.id] === 'approving' ? 'Approving…' : 'Approve'}
-                          </button>
-                          <button
-                            className="btn-secondary"
-                            style={{ padding: '5px 14px', fontSize: 12, color: 'var(--bad)', borderColor: 'var(--bad)' }}
-                            disabled={!!busy[u.id]}
-                            onClick={() => doReject(u.id)}
-                          >
-                            {busy[u.id] === 'rejecting' ? 'Rejecting…' : 'Reject'}
-                          </button>
-                          <button
-                            className="btn-secondary"
-                            style={{ padding: '5px 14px', fontSize: 12 }}
-                            disabled={!!busy[u.id]}
-                            onClick={() => doRemove(u.id)}
-                          >
-                            {busy[u.id] === 'removing' ? 'Removing…' : 'Remove'}
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </section>
-
-          {/* All users section */}
-          {rest.length > 0 && (
-            <section className="trend-card" style={{ padding: '22px 26px' }}>
-              <h2 className="section-title" style={{ marginBottom: 4 }}>All Users</h2>
-              <div className="section-sub" style={{ marginBottom: 18 }}>Approved and rejected accounts</div>
-              <table className="teams-table">
-                <thead>
-                  <tr>
-                    <th>Email</th>
-                    <th>Role</th>
-                    <th>Joined</th>
-                    <th style={{ textAlign: 'center' }}>Status</th>
-                    <th style={{ textAlign: 'right' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rest.map(u => (
-                    <tr key={u.id}>
-                      <td><strong>{u.email}</strong></td>
-                      <td><span className="dept-tag">{u.role}</span></td>
-                      <td className="soft">{new Date(u.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
-                      <td style={{ textAlign: 'center' }}>
-                        <span style={{ ...STATUS_STYLE[u.status], padding: '2px 10px', borderRadius: 10, fontSize: 12, textTransform: 'capitalize' }}>
-                          {msgs[u.id] === 'error' ? 'Error' : u.status}
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'right' }}>
-                        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                          {u.status !== 'approved' && (
-                            <button
-                              className="btn-primary"
-                              style={{ padding: '5px 14px', fontSize: 12 }}
-                              disabled={!!busy[u.id]}
-                              onClick={() => doApprove(u.id)}
-                            >
-                              {busy[u.id] === 'approving' ? 'Approving…' : 'Approve'}
-                            </button>
-                          )}
-                          {u.status !== 'rejected' && u.role !== 'admin' && (
-                            <button
-                              className="btn-secondary"
-                              style={{ padding: '5px 14px', fontSize: 12, color: 'var(--bad)', borderColor: 'var(--bad)' }}
-                              disabled={!!busy[u.id]}
-                              onClick={() => doReject(u.id)}
-                            >
-                              {busy[u.id] === 'rejecting' ? 'Rejecting…' : 'Reject'}
-                            </button>
-                          )}
-                          {u.role !== 'admin' && (
-                            <button
-                              className="btn-secondary"
-                              style={{ padding: '5px 14px', fontSize: 12 }}
-                              disabled={!!busy[u.id]}
-                              onClick={() => doRemove(u.id)}
-                            >
-                              {busy[u.id] === 'removing' ? 'Removing…' : 'Remove'}
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </section>
+                ))}
+              </tbody>
+            </table>
           )}
-        </>
+        </section>
       )}
     </main>
   );

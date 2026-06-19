@@ -1224,9 +1224,8 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
   process.exit(1);
 }
 
-// SLA Dashboard ID in ConfigDashboards — matches the actual row in the DB.
-// Query: SELECT DashboardID FROM ConfigDashboards WHERE Name='SLA Dashboard'
-const SLA_DASHBOARD_ID = 0;
+// SLA Dashboard ID in ConfigDashboards — seeded on startup as ID = 1.
+const SLA_DASHBOARD_ID = 1;
 
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization;
@@ -1327,12 +1326,20 @@ app.post('/api/auth/signup', authLimiter, express.json(), async (req, res) => {
     if (existing.recordset.length)
       return res.status(409).json({ error: 'An account with that email already exists.' });
     const hash = await bcrypt.hash(password, 12);
-    await pool.request()
-      .input('staffId', sql.Int,           staffId)
+    const newUser = await pool.request()
+      .input('staffId', sql.Int,              staffId)
       .input('hash',    sql.NVarChar(sql.MAX), hash)
       .query(`INSERT INTO ConfigReportUsers (StaffId, PasswordHash, CreatedAt)
+              OUTPUT INSERTED.UserId
               VALUES (@staffId, @hash, GETDATE())`);
-    res.json({ message: 'Signup successful. Your account is pending admin approval.' });
+    const userId = newUser.recordset[0].UserId;
+    // Auto-approve: grant viewer access immediately — no admin approval required
+    await pool.request()
+      .input('userId', sql.Int, userId)
+      .input('dashId', sql.Int, SLA_DASHBOARD_ID)
+      .query(`INSERT INTO DashboardAccess (ConfigDashboardId, UserId, Role, IsActive)
+              VALUES (@dashId, @userId, 'viewer', 1)`);
+    res.json({ message: 'Signup successful. You can now log in.' });
   } catch (err) {
     sendError(res, 500, 'Internal server error', err);
   }
@@ -1613,29 +1620,46 @@ app.listen(PORT, async () => {
       `);
       console.log('[startup] auth tables verified (ConfigReportUsers, ConfigDashboards, DashboardAccess).');
 
-      // Seed default system admin if system@admin.local account doesn't exist yet
+      // ── Step 1: Seed ConfigDashboards (DashboardID=1) if empty ──────────────
+      try {
+        const cdCount = await pool.request().query('SELECT COUNT(*) AS n FROM ConfigDashboards');
+        if (cdCount.recordset[0].n === 0) {
+          await pool.request().query(
+            `SET IDENTITY_INSERT ConfigDashboards ON;
+             INSERT INTO ConfigDashboards (DashboardID, Name, IsActive) VALUES (1, 'SLA Dashboard', 1);
+             SET IDENTITY_INSERT ConfigDashboards OFF`
+          );
+          console.log('[startup] seeded ConfigDashboards: SLA Dashboard (ID=1)');
+        }
+      } catch (e) {
+        console.warn('[startup] ConfigDashboards seed skipped:', e.message);
+      }
+
+      // ── Step 2: Seed system admin in ConfigReportUsers if not present ────────
       try {
         const existing = await pool.request().query(
           `SELECT TOP 1 cru.UserId FROM ConfigReportUsers cru
            INNER JOIN Staff s ON cru.StaffId = s.StaffID
-           WHERE s.EmailAddress = 'system@admin.local'`
+           WHERE s.FirstName = 'System'`
         );
 
         if (!existing.recordset.length) {
-          // Find or create a Staff record for the system account
+          // Look for an existing Staff record with FirstName = 'System'
           let staffId;
           const sysStaff = await pool.request().query(
-            `SELECT TOP 1 StaffID FROM Staff WHERE FirstName = 'System' AND EmailAddress = 'system@admin.local'`
+            `SELECT TOP 1 StaffID FROM Staff WHERE FirstName = 'System'`
           );
           if (sysStaff.recordset.length) {
             staffId = sysStaff.recordset[0].StaffID;
+            console.log('[startup] found existing System staff, StaffID =', staffId);
           } else {
-            // StaffID is NOT IDENTITY — use -1 as reserved system account
+            // StaffID is NOT IDENTITY — reserve -1 for system account
             await pool.request().query(
               `INSERT INTO Staff (StaffID, FirstName, Surname, EmailAddress, OfficeId, EmployeeStatus, IsGroup)
                VALUES (-1, 'System', 'Admin', 'system@admin.local', 0, 1, 0)`
             );
             staffId = -1;
+            console.log('[startup] created System staff record (StaffID=-1)');
           }
 
           // Hash the default password
@@ -1643,22 +1667,24 @@ app.listen(PORT, async () => {
 
           // Insert ConfigReportUsers
           const newUser = await pool.request()
-            .input('staffId', sql.Int,           staffId)
+            .input('staffId', sql.Int,              staffId)
             .input('hash',    sql.NVarChar(sql.MAX), defaultHash)
             .query(`INSERT INTO ConfigReportUsers (StaffId, PasswordHash, CreatedAt)
                     OUTPUT INSERTED.UserId
                     VALUES (@staffId, @hash, GETDATE())`);
           const userId = newUser.recordset[0].UserId;
 
-          // Grant admin access
+          // Grant admin access in DashboardAccess
           await pool.request()
             .input('userId', sql.Int, userId)
             .input('dashId', sql.Int, SLA_DASHBOARD_ID)
             .query(`INSERT INTO DashboardAccess (ConfigDashboardId, UserId, Role, IsActive)
                     VALUES (@dashId, @userId, 'admin', 1)`);
 
-          console.log('[startup] seeded default system admin — email: system@admin.local  password: @dmin');
+          console.log('[startup] seeded system admin — email: system@admin.local  password: @dmin');
           console.log('[startup] *** Change this password after first login ***');
+        } else {
+          console.log('[startup] system admin already exists — seed skipped.');
         }
       } catch (e) {
         console.warn('[startup] system admin seed skipped:', e.message);
