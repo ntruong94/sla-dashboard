@@ -60,11 +60,11 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 | KPI | Description | Status filter | SQL logic |
 |-----|-------------|---------------|-----------|
 | Total Active Tasks | Count of open tasks created **today** | `IN (1,4,5,6)` active only | `SUM(... AND TaskStatusID IN (1,4,5,6))` |
-| Overall SLA % | `(tasks completed within target ÷ total tasks completed) × 100` — **DateCompleted** basis | `= 2` completed only | `SUM(CASE WHEN DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0 <= targetExpr THEN 1 ELSE 0 END) / NULLIF(SUM(1), 0) * 100` scoped to `DateCompleted = today` |
+| Overall SLA % | `((tasks completed within target) OR (tasks completed by SLAAdjustedDate) ÷ total tasks completed) × 100` — **DateCompleted** basis | `= 2` completed only | `SUM(CASE WHEN (DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0 <= targetExpr OR (SLAAdjustedDate IS NOT NULL AND DateCompleted <= SLAAdjustedDate)) THEN 1 ELSE 0 END) / NULLIF(SUM(1), 0) * 100` scoped to `DateCompleted = today` |
 | Avg Turnaround (TAT) | Mean elapsed time across all tasks created today | all (1,2,4,5,6) | Open tasks: `AVG(DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0)` · Closed tasks: `AVG(DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0)` |
-| Overdue / Breached | Count of **open** tasks created today that are overdue | `IN (1,4,5,6)` active only | `SUM(... AND (DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0 > targetExpr OR (SLAAdjustedDate IS NOT NULL AND GETDATE() > SLAAdjustedDate)))` |
+| Overdue / Breached | Count of **open** tasks created today that are overdue | `IN (1,4,5,6)` active only | `SUM(... AND DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0 > targetExpr)` |
 | Per-Team Volume | Active task count per team, scoped to `DateCreated = today` | `IN (1,4,5,6)` active only | `/api/teams` query 1, grouped by DepartmentId CASE |
-| Per-Team SLA % | `completed within target ÷ total completed × 100` per team — **DateCompleted** basis | `= 2` completed only | separate SLA query (Q3 in `fetchTeamsData`) using `DATEDIFF(DateCreated, DateCompleted) / 60.0 <= targetExpr`, grouped by TEAM_ID_CASE, scoped to `DateCompleted = today` |
+| Per-Team SLA % | `((completed within target) OR (completed by SLAAdjustedDate)) ÷ total completed × 100` per team — **DateCompleted** basis | `= 2` completed only | separate SLA query (Q3 in `fetchTeamsData`) using `(DATEDIFF(DateCreated, DateCompleted) / 60.0 <= targetExpr OR (SLAAdjustedDate IS NOT NULL AND DateCompleted <= SLAAdjustedDate))`, grouped by TEAM_ID_CASE, scoped to `DateCompleted = today` |
 | Per-Team Avg TAT | Mean elapsed time per team, all tasks today | all (1,2,4,5,6) | Same mixed CASE: `WHEN active THEN DATEDIFF(DateCreated, GETDATE()) ELSE DATEDIFF(DateCreated, DateCompleted)` |
 | Per-Team Overdue | Open tasks past SLA target per team, today | `IN (1,4,5,6)` active only | same query 1 |
 
@@ -74,17 +74,17 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 >
 > The `TotalHoursOnTask` stored column is **no longer used** for any TAT, overdue, or at-risk calculation (it was NULL for ~98% of active tasks). All calculations now use the DATEDIFF formula.
 
-> **Overdue Rule (2026-06-12):** A task is overdue if **either** condition is true:
-> 1. Real-time TAT (`DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0`) exceeds the team's configured SLA target hours
-> 2. `SLAAdjustedDate IS NOT NULL AND GETDATE() > SLAAdjustedDate` (current datetime is past the task's SLA adjusted deadline)
+> **Overdue Rule (2026-06-18 — updated):** A task is overdue when:
+> Real-time TAT (`DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0`) exceeds the team's configured SLA target hours.
 >
-> Combined SQL condition (active tasks only):
+> SQL condition (active tasks only):
 > ```sql
-> (DATEDIFF(MINUTE, t.DateCreated, GETDATE()) / 60.0 > ${targetExpr}
->  OR (t.SLAAdjustedDate IS NOT NULL AND GETDATE() > t.SLAAdjustedDate))
+> DATEDIFF(MINUTE, t.DateCreated, GETDATE()) / 60.0 > ${targetExpr}
 > ```
-> Applied to: KPI overdue count, KPI prev-day delta, team card overdue count, team card delta, tasks view `status='bad'` filter, alerts query `overdue` count + SLA%, alert-tasks drill-down overdue UNION branch.
-> `SLAAdjustedDate` is a `datetime` column in the `Tasks` table (confirmed in `SEReport_schema.sql` line 4364).
+> The previous Rule 2 (`SLAAdjustedDate IS NOT NULL AND GETDATE() > SLAAdjustedDate`) has been **REMOVED**. `SLAAdjustedDate` is no longer used for active-task overdue determination — overdue is purely target-driven and reacts directly to the SLA target configured in the Settings tab.
+>
+> Applied to: KPI overdue count, KPI prev-day delta, team card overdue count, team card delta, tasks view `status='bad'` filter and CASE, alerts query `overdue` count, alert-tasks drill-down overdue UNION branch.
+> Note: closed-task SLA% rules (Overall SLA % KPI, per-team SLA %, history chart) still use the `SLAAdjustedDate` fallback against `DateCompleted` — that is a separate compliance metric and is unaffected by this change.
 
 > **At Risk Rule (2026-06-12):** A task is at risk if:
 > - Real-time TAT >= `atRiskFraction × SLA target` AND TAT <= SLA target AND SLAAdjustedDate has not passed.
@@ -96,11 +96,18 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 > **Delta scope:** today value − prev biz day value. Same per-metric date columns and status filters.
 > **Team scope filter (all metrics):** `s.DepartmentId IN (101, 128, 10, 122, 86, 82) AND s.EmployeeStatus = 1` — `TEAM_FILTER` constant. All queries use `LEFT JOIN Staff s ON t.AssignedTo = s.StaffID`.
 
-> **SLA% Rule (2026-06-12 — updated):** All SLA% figures (Overall KPI, per-team cards, history chart) use `DateCompleted` for date scoping and compute TAT as `DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0`:
+> **SLA% Rule (2026-06-17 — updated):** All SLA% figures (Overall KPI, per-team cards, history chart) use `DateCompleted` for date scoping and count a completed task as compliant when **either** condition is true:
+> 1. `DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0 <= targetExpr`
+> 2. `SLAAdjustedDate IS NOT NULL AND DateCompleted <= SLAAdjustedDate`
+>
+> The numerator uses one CASE expression with `OR`, so any qualifying completed task is counted **once** (no double counting).
 > ```sql
 > CAST(
 >   SUM(CASE WHEN t.TaskStatusID = 2
->            AND DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= targetExpr
+>            AND (
+>              DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= targetExpr
+>              OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
+>            )
 >            THEN 1 ELSE 0 END) AS FLOAT
 > ) / NULLIF(SUM(CASE WHEN t.TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100
 > ```
@@ -138,10 +145,22 @@ The dashboard maps **8 logical teams**. Teams 1–4, 7, 8 use `Staff.DepartmentI
   and filtered by `cls.Name LIKE N'%...'` pattern
 - `TEAM_FILTER` constant: `(s.DepartmentId IN (101,110,86,122,12,10) AND s.EmployeeStatus = 1) OR <cls filters>`
 - `LOAN_STATUS_JOIN` constant: the two LEFT JOINs above — injected into all aggregate queries after the Staff join
-- `TEAM_ID_CASE` SQL CASE: dept teams → `WHEN s.DepartmentId = N THEN id`; loan_status teams → `WHEN cls.Name LIKE N'%...' THEN id`
+- `TEAM_ID_CASE` SQL CASE: **CRITICAL PRECEDENCE RULE (2026-06-17)** — loan_status teams (5–6) MUST be checked FIRST in the CASE expression, THEN dept teams (1–4, 7–8). When a task's assigned staff matches a DepartmentId AND the task's loan status matches a ConfigLoanStatus, the loan_status filter takes precedence. Example: Task assigned to Charles (DepartmentId=86 Assessments) but with Funder Submission loan status → tagged as team 6, not team 3. In `backend/server.js`, use `TEAMS.filter(t => !t.departmentId)` first (loan_status), then `TEAMS.filter(t => t.departmentId)` (dept), and concatenate their SQL expressions in that order.
 - The `?team=<id>` query param on `/api/tasks` accepts team id 1–8; dept teams add `s.DepartmentId = N AND s.EmployeeStatus = 1`; loan_status teams add the `clsFilter` expression
 - `TEAM_COLORS` in `constants.js`: keyed by team name string → `var(--t1)` … `var(--t8)`
-- CSS: `--t7: #7C3AED; --t8: #0891B2` added to styles.css; `.team-grid` uses `repeat(4, 1fr)` (4 columns)
+- CSS vars in `styles.css`: `--t1:#0F9ED5` `--t2:#4EA72E` `--t3:#E97132` `--t4:#0E2841` `--t5:#7E350E` `--t6:#F6508F` `--t7:#C00000` `--t8:#808080` (steel-blue, green, orange, dark-navy, dark-brown, pink, dark-red, grey); `.team-grid` uses `repeat(4, 1fr)` (4 columns)
+- **Exact team order and hex colors (authoritative):**
+  | # | Team Name | Hex Color |
+  |---|-----------|-----------|
+  | 1 | Data Entry | `#0F9ED5` |
+  | 2 | Valuations | `#4EA72E` |
+  | 3 | Assessments | `#E97132` |
+  | 4 | Packaging & QA | `#0E2841` |
+  | 5 | CLA | `#7E350E` |
+  | 6 | Funder Submission | `#F6508F` |
+  | 7 | Settlement | `#C00000` |
+  | 8 | Ezy Client Care | `#808080` |
+- Chart lines `strokeWidth="2.5"`; dots `r=4` (hover `r=6`) in both `trend.jsx` and `history-chart.jsx`
 
 ---
 
@@ -358,6 +377,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 | `/api/loan-summary` | GET | `{ received, approved, settled }` — each: `{ count, amount, deltas: { count, amount } }`. Count of loans + total `LoanAmount` for `Date_ApplicationReceived`, `Date_FunderApproval`, `Date_Settled` today vs prev biz day. | Dashboard loan strip |
 | `/api/loan-detail/:type` | GET | `[{ ApplicationID, FunderName, LoanAmount }]` — filtered to today for `type = received \| approved \| settled`. Returns rows sorted by `LoanAmount DESC`. 400 on invalid type, 500 on DB error. | `LoanModal` drill-down |
 | `/api/staff/departments` | GET | `[{ departmentId, departmentName, totalStaff }]` — all departments with active staff count (`EmployeeStatus = 1`), ordered high → low. DepartmentId IS NOT NULL filter applied. | StaffListView summary table |
+| `/api/staff/absent-today` | GET | `[{ staffId, fullName, departmentName, workStatusName, startedTime, endedTime }]` — all staff absent today (`ConfigWorkStatus.IsAbsent = 1`) where `WorkStatusHistory.StartedTime` is in today range (`>= today` and `< next day`). | StaffListView “Absent Today” table |
 | `/api/staff/department/:id` | GET | `[{ staffId, fullName, employeeStatus, isGroup }]` — active staff (EmployeeStatus=1, non-null name) in one department, ordered by name. | StaffListView drill-through modal |
 | `/api/admin/users` | GET | `[{ id, email, companyName, role, status, createdAt }]` — status: `pending\|approved\|rejected`. **Admin JWT required.** | AdminView user list |
 | `/api/admin/users/:id/approve` | POST | `{ message }` — sets `IsApproved=1, IsRejected=0`. **Admin JWT required.** | AdminView approve button |
@@ -402,6 +422,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 | 5 | SLA target from ConfigSLA or hardcoded? | RESOLVED (partial) — hardcoded 4h for all teams. ConfigSLA values not yet checked. |
 | 6 | SLAInHours or SoEzySLA for compliance? | RESOLVED — using `TotalHoursOnTask <= SLAInHours` (confirmed working in live queries). |
 | 7 | SQL Server connection details? | RESOLVED — server `DESKTOP-HGGDDCR`, DB `MySEReport`, user `ntruong`, port 1433. |
+| 8 | Drill-through modal showing summary stats but no task rows? | RESOLVED (2026-06-17) — Bug was TEAM_ID_CASE SQL expression precedence. When tasks matched both a DepartmentId AND a ConfigLoanStatus, the dept filter was checked first, causing wrong QueueId assignment. Fixed by reordering CASE conditions: loan_status filters first (teams 5-6), then dept filters (teams 1-4,7-8). Verified end-to-end: `/api/tasks?team=6` now returns 7 Funder Submission tasks with QueueId=6, and modal renders all 7 rows correctly. |
 
 ---
 
@@ -662,8 +683,23 @@ SLA Dashboard/
   - Keep wording short and plain-English; avoid long paragraphs.
   - Each tooltip should cover: what the figure means, how it is calculated, any rules/thresholds, date basis where relevant.
   - If a metric depends on configurable settings (targets, At Risk threshold), mention it briefly.
+- **Settings-affected tooltip rule (2026-06-19 — MANDATORY):** If the card / chart / table that the tooltip describes is **affected** by user configuration in the Settings tab (SLA target, At Risk threshold, etc.), the tooltip text MUST end with the exact sentence: `Target is configurable per team In Settings.` — placed on its own line after a blank line (`\n\n`). If the metric is **not** affected by Settings (pure counts, hardcoded colour legends, modal volume), the sentence MUST NOT be included.
+  - Affected (sentence required): `kpi.overallSla`, `kpi.avgTat`, `kpi.totalOverdue`, `team.sla`, `team.avgTat`, `team.overdue`, `chart.trend`, `modal.sla`, `modal.avgTat`, `modal.overdue`, `alerts.panel`.
+  - Not affected (sentence forbidden): `kpi.totalTasks`, `team.volume`, `teams.status`, `modal.volume`, and the Settings-input inline tooltips in `views.jsx` (Refresh interval, At Risk threshold, Tasks in drill-down) — those describe the settings themselves, not metrics that consume them.
 - **Width:** `InfoTip` accepts an optional `width` prop (default 240px). Pass 260–300px for multi-line content to prevent awkward line breaks. `KpiTile` exposes a `tooltipWidth` prop that forwards to `InfoTip`.
 - `TOOLTIPS.alerts.panel` — used on the "Active Alerts" title in both `AlertsPanel` (dashboard panel) and `AlertsView` (full Alerts page). Explains what triggers an alert (At Risk threshold breach, overdue tasks) and the two severity levels (Critical / Warning). Width 280px.
+- **Active Alerts row description format (2026-06-18):** Backend `/api/alerts` now returns each alert `desc` as: `<total> active tasks today, <compliant> file(s) complete, <overdue> file(s) overdue, SLA at <pct>%`. Applied to all teams/departments and both severities (`critical`, `warning`).
+
+#### Active Alerts Tab Drill-Through Fields (2026-06-18)
+
+- Applies to the **Active Alerts tab** feed drill-through only (`AlertsView` usage of `AlertsPanel`).
+- Drill-through details must render in the same table pattern used by the All Teams drill-through (`task-table` style):
+  - Task ID
+  - Description
+  - Status
+  - TAT vs TARGET
+  - Priority
+- Loading, empty, and error states remain the same as existing alert drill-through behavior.
 
 ### Parallel SQL Queries Pattern
 - Use `Promise.all([query1, query2, query3])` when an endpoint needs multiple independent SQL datasets.
@@ -724,6 +760,54 @@ Wait for `VITE vX.X.X  ready` in output.
 ### Step 4 — Check Cloudflare tunnels
 Run `get_terminal_output` on each active `cloudflared` terminal.
 - If tunnels are **still running** (show `Registered tunnel connection`): no action needed — tell user to refresh browser.
+
+### Step 5 — PRE-FLIGHT CHECK (MANDATORY before saying "OK / ready / refresh browser")
+
+> **This step MUST be executed every time before informing the user that a Vercel-deployed app is ready for testing. Never skip it.**
+
+Run all checks in parallel:
+
+#### Check A — Backend tunnel is live
+```powershell
+Invoke-WebRequest -UseBasicParsing https://<TUNNEL_URL>/api/health -TimeoutSec 20 | Select-Object -ExpandProperty Content
+```
+Expected: `{"status":"OK","mode":"live"}`
+If FAIL: Start a new clean tunnel (`cloudflared.exe tunnel --url http://localhost:5000 --config NUL`), copy the new `trycloudflare.com` URL.
+
+#### Check B — VITE_API_BASE is set and matches live tunnel
+```powershell
+npx vercel env ls --scope mezyproject2026 production
+```
+Confirm `VITE_API_BASE` is **not empty** and matches the running tunnel URL.
+If FAIL: Run `vercel env rm VITE_API_BASE production --yes`, then `echo "<NEW_URL>" | vercel env add VITE_API_BASE production`.
+
+#### Check C — Deployed app JS assets load (no 404)
+```powershell
+$base='https://sla-dashboard-mezyproject2026.vercel.app'
+$html=(Invoke-WebRequest -UseBasicParsing $base).Content
+$js=[regex]::Match($html,'<script[^>]+src="([^"]+)"').Groups[1].Value
+(Invoke-WebRequest -UseBasicParsing "$base$js" -Method Head).StatusCode
+```
+Expected: `200`. If 404: redeploy (`npx vercel --prod --yes --scope mezyproject2026`).
+
+#### Check D — Login does not fail to fetch
+```powershell
+Invoke-RestMethod -Method Post -Uri https://<TUNNEL_URL>/api/auth/login `
+  -ContentType 'application/json' `
+  -Body '{"email":"ntruong@mezy.com.au","password":"123456789"}'
+```
+Expected: `{ token: "..." }`. If FAIL: `VITE_API_BASE` mismatch or backend down — go back to Check A.
+
+#### Common causes of "Failed to fetch" on login
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `Failed to fetch` on any API call | `VITE_API_BASE` is empty or expired tunnel URL | Checks B + A + redeploy |
+| `Failed to fetch` on login with CORS error in console | Deployed frontend origin is not in backend CORS allowlist | Add current Vercel hostname to backend `DEFAULT_ORIGINS` or `ALLOWED_ORIGINS`, restart backend, rerun Check D |
+| White page on Vercel | JS assets return 404 (wrong `base` path in old build) | Check C + redeploy |
+| Login 401 everywhere | SSO protection enabled on Vercel project | `vercel project protection disable sla-dashboard --sso` |
+| Tunnel returns 404 on all paths | cloudflared loaded named tunnel config.yml ingress rules | Kill tunnel; restart with `--config NUL` |
+
+**Only tell the user "OK, refresh" after all 4 checks pass.**
 - If tunnels have **died or URLs expired**: start new tunnels (Steps 5–7 below).
 
 ### Step 5 — (If tunnels dead) Start backend tunnel
@@ -822,6 +906,14 @@ const closeLoanModal = useCallback(() => setLoanModal(null), []);
 
 A read-only informational view accessible to all authenticated users. Placed in the sidebar navigation above "User Management".
 
+### Absent Today Table
+
+- **Placement:** Above the existing Staff List summary table
+- **Filter rule:** `WorkStatusHistory.StartedTime >= today AND < next day`
+- **Absent rule:** `ConfigWorkStatus.IsAbsent = 1`
+- **Columns:** Staff ID · Full Name (`FirstName + Surname`) · Department Name · Work Status Name · StartedTime · EndedTime
+- **State handling:** Shows loading, error, and empty states independently from the department summary table
+
 ### Summary Table
 
 - **Source tables:** `Department` (left join) `Staff`
@@ -844,6 +936,7 @@ Triggered by clicking any department row. Uses the existing `.modal-overlay` / `
 | Endpoint | Method | Auth | Returns |
 |----------|--------|------|---------|
 | `/api/staff/departments` | GET | JWT | `[{ departmentId, departmentName, totalStaff }]` |
+| `/api/staff/absent-today` | GET | JWT | `[{ staffId, fullName, departmentName, workStatusName, startedTime, endedTime }]` |
 | `/api/staff/department/:departmentId` | GET | JWT | `[{ staffId, fullName, employeeStatus, isGroup }]` |
 
 ### Frontend Components
@@ -852,6 +945,7 @@ Triggered by clicking any department row. Uses the existing `.modal-overlay` / `
 |--------------------|------|---------|
 | `StaffListView` | `components/views.jsx` | Full view — summary table + drill-through modal |
 | `getStaffDepartments()` | `api.js` | `GET /api/staff/departments` |
+| `getStaffAbsentToday()` | `api.js` | `GET /api/staff/absent-today` |
 | `getStaffByDepartment(deptId)` | `api.js` | `GET /api/staff/department/:id` |
 
 ### Navigation
@@ -862,7 +956,66 @@ Triggered by clicking any department row. Uses the existing `.modal-overlay` / `
 
 ---
 
-## 25. Security Rules — Blocking Rules for GitHub Copilot
+## 25. Hotfix: Team ID Mapping Bug (2026-06-17)
+
+### Problem
+Drill-through modal showed correct summary statistics (e.g., "Volume: 7") but rendered an empty task table. The task rows failed to display despite the API returning 7 records.
+
+### Root Cause
+The `TEAM_ID_CASE` SQL CASE expression in `/api/tasks` was checking department-based team filters BEFORE loan-status-based team filters. When a task was assigned to a staff member with `DepartmentId=86` (Assessments team #3) but the task's loan status matched "Funder Submission" (team #6), the SQL incorrectly tagged it as team 3.
+
+**Example:** Task 5696962 assigned to Charles (DepartmentId=86) with Funder Submission loan status:
+- **Before fix:** Returned `QueueId=3, QueueName="Assessments"` in API response
+- **After fix:** Returned `QueueId=6, QueueName="Funder Submission"` in API response
+
+Frontend grouped tasks by `QueueId`, so tasks with wrong QueueId landed in the wrong team bucket, causing the modal to find zero matching tasks for team=6.
+
+### Solution Implemented
+Reordered the `TEAM_ID_CASE` and `TEAM_NAME_CASE` SQL expressions in `backend/server.js` (lines ~100-110) to enforce **loan-status filter precedence**:
+
+```javascript
+const loanStatusTeams = TEAMS.filter(t => !t.departmentId);  // teams 5-6 (CLA, Funder Submission)
+const deptTeams       = TEAMS.filter(t => t.departmentId);   // teams 1-4, 7-8 (dept-based)
+
+const TEAM_ID_CASE = [
+  ...loanStatusTeams.map(t => `WHEN ${t.clsFilter} THEN ${t.id}`),
+  ...deptTeams.map(t => `WHEN s.DepartmentId = ${t.departmentId} THEN ${t.id}`)
+].join(' ');
+```
+
+**Precedence rule:** Check `ConfigLoanStatus` filters first; if no match, then check `Staff.DepartmentId`. This ensures that a task's loan status categorization takes precedence over its assigned staff's department.
+
+### Verification (2026-06-17)
+1. **API Response Test:** `GET /api/tasks?team=6&scope=today`
+   - Before: 7 records returned with `QueueId: 3` or `4` (wrong)
+   - After: 7 records returned with `QueueId: 6` (correct) ✓
+   
+2. **End-to-End Testing:** 
+   - Logged in via browser at `http://localhost:5173`
+   - Opened Funder Submission team card (shows "Volume: 7")
+   - Clicked card to open drill-through modal
+   - Result: Modal task table renders all 7 rows with complete data (staff name, description, status, TAT, priority) ✓
+
+3. **Affected Tasks Verified:**
+   - Task IDs: 5696962, 5696966, 5697092, 5697229, 5697232, 5697342, 5697379
+   - All now correctly tagged as team 6 (Funder Submission) in API response
+
+### Files Modified
+- `backend/server.js` — Updated TEAM_ID_CASE and TEAM_NAME_CASE expressions (lines ~100-110)
+
+### Impact Assessment
+- **Dashboard:** Drill-through modals for teams 1-8 now render correctly
+- **No breaking changes:** Frontend and API signatures unchanged; only internal SQL ordering modified
+- **Other teams unaffected:** Department-based teams (1-4, 7-8) continue to work correctly
+
+### Future Safeguards
+1. Any new loan-status-based teams added in future must be inserted BEFORE dept-based teams in the `TEAM_ID_CASE` array
+2. Test drill-through modals for teams 5 and 6 regularly in QA to catch team mapping regressions
+3. Consider adding SQL logging/monitoring for TEAM_ID_CASE assignments if team routing becomes business-critical
+
+---
+
+## 26. Security Rules — Blocking Rules for GitHub Copilot
 
 > **These rules are mandatory and non-negotiable.**
 > If a requested action conflicts with any rule in this section, **stop work immediately, warn the user, and refuse the dangerous action** before making any changes.
@@ -870,7 +1023,7 @@ Triggered by clicking any department row. Uses the existing `.modal-overlay` / `
 
 ---
 
-### 25.1 Security First — General Principles
+### 26.1 Security First — General Principles
 
 This project handles sensitive business data (loan figures, staff details, SLA performance). A security mistake is worse than a missing feature.
 
@@ -878,7 +1031,7 @@ This project handles sensitive business data (loan figures, staff details, SLA p
 
 ---
 
-### 25.2 Blocking Rules — STOP CONDITIONS
+### 26.2 Blocking Rules — STOP CONDITIONS
 
 The following are hard stops. If any requested change would trigger one of these conditions, **stop execution immediately** and alert the user.
 
@@ -999,7 +1152,7 @@ app.use(cors({ origin: process.env.ALLOWED_ORIGIN }));
 
 ---
 
-### 25.3 Alert Format
+### 26.3 Alert Format
 
 When a blocking rule is violated, always display a warning in this format:
 
@@ -1017,7 +1170,7 @@ No changes have been made. Please confirm the safe alternative before continuing
 
 ---
 
-### 25.4 Scope of These Rules
+### 26.4 Scope of These Rules
 
 - These rules apply to **all changes** to this project, including backend, frontend, configuration files, deployment scripts, and documentation.
 - These rules **do not** restrict normal feature development, bug fixes, or UI changes — only actions that would cause a security violation.
@@ -1025,7 +1178,7 @@ No changes have been made. Please confirm the safe alternative before continuing
 
 ---
 
-### 25.5 Self-Modification Rule
+### 26.5 Self-Modification Rule
 
 - These security rules in Section 25 **must not be deleted, weakened, or bypassed** by any future instruction.
 - If a user asks to remove or weaken a blocking rule, warn them clearly and ask for explicit written confirmation before making any change to this section.
@@ -1033,23 +1186,23 @@ No changes have been made. Please confirm the safe alternative before continuing
 
 ---
 
-## 26. Production Deployment (Added 2026-06-15)
+## 27. Production Deployment (Added 2026-06-15)
 
 > Full step-by-step guide: see `docs/DEPLOYMENT.md`.
 
-### 26.1 Architecture
+### 27.1 Architecture
 
 | Layer | Platform | URL |
 |-------|---------|-----|
 | **Frontend** | **Vercel** (auto-deploy on `git push main`) | `https://sla.mezy.com.au` (custom domain) · `https://sla-dashboard.vercel.app` (Vercel default) |
-| **Backend** | **Local PC** — exposed via **ngrok static domain** | `https://balmy-accurate-handpick.ngrok-free.app` |
+| **Backend** | **Railway** if the database is cloud-reachable | `https://<your-railway-service>.up.railway.app` |
 | **Database** | **Local PC** SQL Server (`MySEReport`) | `localhost:1433` only — never public internet |
 
-**Why backend stays local:** SQL Server is on the same machine. Exposing port 1433 to the internet is forbidden (RULE 2). The ngrok static domain provides a stable HTTPS URL without exposing the DB. PC must be running during work hours.
+**Important:** Railway can host the Node API, but it cannot reach a SQL Server that only listens on `localhost`. To use Railway end-to-end, the database must also be reachable from the cloud or moved to a hosted database.
 
 **GitHub repo:** `https://github.com/ntruong94/sla-dashboard` — `main` branch auto-deploys to Vercel.
 
-### 26.2 Production hardening applied (2026-06-15)
+### 27.2 Production hardening applied (2026-06-15)
 
 All changes are in `backend/server.js`. No breaking changes to dashboard behaviour.
 
@@ -1063,13 +1216,13 @@ All changes are in `backend/server.js`. No breaking changes to dashboard behavio
 | Env-driven CORS | `ALLOWED_ORIGINS` env var (comma-separated) overrides hardcoded origin list — new frontend URLs without code changes |
 | `IS_PROD` flag | `NODE_ENV === 'production'` — drives error verbosity and any future prod-only behaviour |
 
-### 26.3 Required environment variables
+### 27.3 Required environment variables
 
 **Backend (`backend/.env` — never commit):**
 
 | Variable | Purpose |
 |----------|---------|
-| `DB_SERVER` | SQL Server host (e.g. `localhost`) |
+| `DB_SERVER` | SQL Server host reachable from Railway |
 | `DB_PORT` | SQL Server port (default `1433`) |
 | `DB_DATABASE` | Database name |
 | `DB_USER` | SQL login username |
@@ -1083,18 +1236,18 @@ All changes are in `backend/server.js`. No breaking changes to dashboard behavio
 
 | Variable | Purpose |
 |----------|---------|
-| `VITE_API_BASE` | Full URL of the backend tunnel (no trailing slash) |
+| `VITE_API_BASE` | Full URL of the Railway backend (no trailing slash) |
 
 See `backend/.env.example` and `frontend/.env.example` for templates.
 
-### 26.4 Daily operations
+### 27.4 Daily operations
 
 1. Start backend: `node server.js` in `backend/` — wait for `Connected to SQL Server`
-2. Start ngrok: `ngrok http --domain=balmy-accurate-handpick.ngrok-free.app 5000`
+2. If using Railway, copy the generated Railway URL into `VITE_API_BASE`
 3. Users open `https://sla.mezy.com.au` — log in with approved credentials
 
-### 26.5 Upgrade path — Cloudflare Named Tunnel (recommended)
+### 27.5 Optional fallback — Cloudflare Named Tunnel
 
-Replace the ngrok manual step with a Cloudflare Named Tunnel running as a Windows service — auto-starts on boot, reconnects after network interruptions. See `docs/DEPLOYMENT.md` Section 7 for setup steps.
+Use a Cloudflare Named Tunnel running as a Windows service if you want a local-hosted backend with a stable URL. See `docs/DEPLOYMENT.md` Section 8 for setup steps.
 
 Tunnel URL would become `https://api.sla.mezy.com.au`. Update `VITE_API_BASE` in Vercel and `ALLOWED_ORIGINS` in `backend/.env`.

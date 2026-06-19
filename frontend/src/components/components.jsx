@@ -12,14 +12,17 @@ import { fmtHMS } from './utils.js';
 // or stacking contexts cannot clip it. Positioned with position:fixed.
 export const InfoTip = ({ text, width }) => {
   const iconRef = React.useRef(null);
-  const [pos, setPos] = React.useState(null); // {top, left} in px when visible
+  const [pos, setPos] = React.useState(null); // {top, left, below} in px when visible
 
   const show = (e) => {
     const r = (e.currentTarget || iconRef.current).getBoundingClientRect();
+    const bubbleH = 200; // conservative estimate — real height unknown until rendered
+    const below = r.top < bubbleH; // flip downward when too close to top of viewport
     // position:fixed uses viewport coords — do NOT add scrollY/scrollX
     setPos({
-      top:  r.top,
+      top:  below ? r.bottom : r.top,
       left: r.left + r.width / 2,
+      below,
     });
   };
   const hide = () => setPos(null);
@@ -39,7 +42,7 @@ export const InfoTip = ({ text, width }) => {
       <span className="info-tip-icon">i</span>
       {pos && ReactDOM.createPortal(
         <span
-          className="info-tip-bubble info-tip-bubble--fixed"
+          className={`info-tip-bubble info-tip-bubble--fixed${pos.below ? ' info-tip-bubble--below' : ''}`}
           style={{ top: pos.top, left: pos.left, ...(width ? { width } : {}) }}
         >
           {text}
@@ -111,7 +114,7 @@ const TeamCard = ({ team, onClick }) => {
         </div>
         <div className="stat">
           <div className="stat-label">Avg TAT<InfoTip text={TOOLTIPS.team.avgTat} width={250}/></div>
-          <div className={`stat-value ${over ? 'danger' : ''}`}>
+          <div className="stat-value">
             {fmtHMS(team.avgTat)}
           </div>
         </div>
@@ -156,8 +159,18 @@ function relativeTime(iso) {
   return `${days}d ago`;
 }
 
+function splitAlertDesc(desc) {
+  const m = String(desc || '').match(/^\s*(\d+)\s+active tasks today,\s*(\d+)\s+files?\s+complete,\s*(\d+)\s+files?\s+overdue,\s*SLA at\s*(\d+)%\.?\s*$/i);
+  if (!m) return { main: desc || '', meta: '' };
+  const [, total, complete, overdue, pct] = m;
+  return {
+    main: `${total} active tasks today, SLA at ${pct}%`,
+    meta: `(${complete} file${complete === '1' ? '' : 's'} in progress, ${overdue} file${overdue === '1' ? '' : 's'} overdue)`,
+  };
+}
+
 // --- Alerts panel ---
-const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, customTargets = {} }) => {
+const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, customTargets = {}, enableDrillDown = true, drillMode = 'list' }) => {
   const [expandedId, setExpandedId] = React.useState(null);
   const [taskMap, setTaskMap]       = React.useState({});
   const [loadingId, setLoadingId]   = React.useState(null);
@@ -170,6 +183,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
   }, []);
 
   const handleAlertClick = (a) => {
+    if (!enableDrillDown) return;
     if (expandedId === a.id) { setExpandedId(null); return; }
     setExpandedId(a.id);
     if (taskMap[a.id]) return; // already fetched
@@ -178,6 +192,18 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
     getAlertTasks(a.queueId, atRiskPct, customTargets[a.queueId] || null)
       .then(data => { setTaskMap(prev => ({ ...prev, [a.id]: data })); setLoadingId(null); })
       .catch(() => { setErrorId(a.id); setLoadingId(null); });
+  };
+
+  const normalizePriority = (p) => {
+    const v = String(p || '').trim().toLowerCase();
+    if (v === 'high' || v === 'highest' || v === 'urgent' || v === 'h') return 'high';
+    if (v === 'med' || v === 'medium' || v === 'm') return 'med';
+    return 'low';
+  };
+
+  const alertStatusInfo = (taskType) => {
+    if (taskType === 'overdue') return { cls: 'bad', label: 'Overdue' };
+    return { cls: 'warn', label: 'At Risk' };
   };
 
   return (
@@ -192,28 +218,38 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
         {alerts.length === 0 ? (
           <div className="alerts-empty">✓ All clear — no active alerts</div>
         ) : alerts.map(a => {
-          const isExpanded = expandedId === a.id;
+          const isExpanded = enableDrillDown && expandedId === a.id;
           const isLoading  = loadingId === a.id;
           const hasError   = errorId === a.id;
           const tasks      = (taskMap[a.id] || []).slice(0, maxTasks);
+          const descLines  = splitAlertDesc(a.desc);
           return (
             <div key={a.id} className={`alert ${a.severity}${isExpanded ? ' expanded' : ''}`}>
               <div className="alert-main"
-                onClick={() => handleAlertClick(a)}
-                role="button" tabIndex={0}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAlertClick(a); } }}>
+                onClick={() => enableDrillDown && handleAlertClick(a)}
+                role={enableDrillDown ? 'button' : undefined}
+                tabIndex={enableDrillDown ? 0 : undefined}
+                onKeyDown={e => {
+                  if (!enableDrillDown) return;
+                  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAlertClick(a); }
+                }}>
                 <div className="alert-icon">
                   <Icon name={a.severity === 'critical' ? 'alert-critical' : 'alert-warning'} size={14}/>
                 </div>
                 <div className="alert-body">
                   <div className="alert-title">{a.title}</div>
-                  <div className="alert-desc">{a.desc}</div>
+                  <div className="alert-desc">
+                    <div className="alert-desc-main">{descLines.main}</div>
+                    {descLines.meta && <div className="alert-desc-meta">{descLines.meta}</div>}
+                  </div>
                 </div>
                 <div className="alert-right">
                   <div className="alert-time">{relativeTime(a.triggeredAt)}</div>
-                  <span className="alert-chevron">
-                    <Icon name={isExpanded ? 'arrow-up' : 'arrow-down'} size={12}/>
-                  </span>
+                  {enableDrillDown && (
+                    <span className="alert-chevron">
+                      <Icon name={isExpanded ? 'arrow-up' : 'arrow-down'} size={12}/>
+                    </span>
+                  )}
                 </div>
                 <button className="alert-dismiss" onClick={(e) => { e.stopPropagation(); onDismiss(a.id); }}
                   aria-label="Dismiss alert">
@@ -230,6 +266,72 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                   {!isLoading && !hasError && (() => {
                     const overdue = tasks.filter(t => t.taskType === 'overdue');
                     const atrisk  = tasks.filter(t => t.taskType === 'atrisk');
+                    const rows = [...overdue, ...atrisk];
+
+                    if (drillMode === 'table') {
+                      return (
+                        <table className="task-table">
+                          <thead>
+                            <tr>
+                              <th style={{width: '110px'}}>Task ID</th>
+                              <th style={{width: '120px'}}>Create Dte</th>
+                              <th style={{width: '140px'}}>SLAAdjusted Dte</th>
+                              <th>Description</th>
+                              <th style={{width: '110px'}}>Status</th>
+                              <th style={{width: '220px'}}>TAT vs Target</th>
+                              <th style={{width: '100px'}}>Priority</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.map(t => {
+                              const status = alertStatusInfo(t.taskType);
+                              const target = Number(t.TargetHours ?? t.SLAInHours ?? 0);
+                              const tat = Number(t.TatHours ?? t.TotalHoursOnTask ?? 0);
+                              const pct = target > 0 ? Math.min(tat / target, 1.6) : 0;
+                              const desc = (t.StaffFullName && t.StaffFullName.trim())
+                                ? t.StaffFullName.trim()
+                                : (t.ShortDescription || `Task #${t.TaskID}`);
+                              const prio = normalizePriority(t.Priority);
+                              const prioLabel = prio === 'high' ? 'High' : prio === 'med' ? 'Med' : 'Low';
+                              const rowCls = status.cls === 'bad' ? 'overdue-row' : 'risk-row';
+                              return (
+                                <tr key={t.TaskID + '-' + t.taskType} className={rowCls}>
+                                  <td><span className="task-id">{t.TaskID}</span></td>
+                                  <td><span className="soft">{t.CreateDte || '-'}</span></td>
+                                  <td><span className="soft">{t.SLAAdjustedDte || '-'}</span></td>
+                                  <td>
+                                    <div className="task-desc-main">{desc}</div>
+                                    <div className="task-client">{t.ShortDescription || '-'}</div>
+                                  </td>
+                                  <td>
+                                    <span className={`pill ${status.cls}`}>
+                                      <span className="pill-dot"/>{status.label}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <div className="tat-cell">
+                                      <div className="t">
+                                        <span className="mono">{tat.toFixed(1)}h</span>
+                                        <span className="vs">/ {target.toFixed(1)}h target</span>
+                                      </div>
+                                      <div className="tat-bar">
+                                        <div className={`progress-fill ${status.cls}`} style={{ width: `${Math.min(pct * 100, 100)}%` }}/>
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td>
+                                    <span className={`priority ${prio}`}>
+                                      <span className="dot"/>{prioLabel}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      );
+                    }
+
                     return (
                       <>
                         {overdue.map(t => (
@@ -287,6 +389,8 @@ const TaskRow = ({ task, target }) => {
   return (
     <tr className={rowCls}>
       <td><span className="task-id">{task.id}</span></td>
+      <td><span className="soft">{task.createDte || '-'}</span></td>
+      <td><span className="soft">{task.slaAdjustedDte || '-'}</span></td>
       <td>
         <div className="task-desc-main">{task.desc}</div>
         <div className="task-client">{task.client}</div>
@@ -367,6 +471,8 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10 }) => {
             <thead>
               <tr>
                 <th style={{width: '110px'}}>Task ID</th>
+                <th style={{width: '120px'}}>Create Dte</th>
+                <th style={{width: '140px'}}>SLAAdjusted Dte</th>
                 <th>Description</th>
                 <th style={{width: '110px'}}>Status</th>
                 <th style={{width: '220px'}}>TAT vs Target</th>
@@ -386,7 +492,7 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10 }) => {
 // --- Loan KPI Tile ---
 // Layout matches provided screenshot: title row, two-col stats (count left / amount right),
 // footer with count delta (left, green/red) and amount delta (right, green/red).
-const LoanKpiTile = ({ label, count, amount, countDelta, amtDelta, target, onClick }) => {
+const LoanKpiTile = ({ label, count, amount, countDelta, amtDelta, target, onClick, tooltip, tooltipWidth }) => {
   // Full number with commas for the stat value (e.g. $1,100,000)
   const fmtAmtFull = (v) => {
     if (v == null || isNaN(v)) return '$0';
@@ -411,7 +517,10 @@ const LoanKpiTile = ({ label, count, amount, countDelta, amtDelta, target, onCli
       style={{ cursor: onClick ? 'pointer' : 'default' }}
       onKeyDown={onClick ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }) : undefined}>
       <div className="card-head" style={{ paddingBottom: '10px', marginBottom: '6px', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-        <h3 className="card-team" style={{ margin: 0 }}>{label}</h3>
+        <h3 className="card-team" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+          {label}
+          {tooltip && <span onClick={e => e.stopPropagation()}><InfoTip text={tooltip} width={tooltipWidth ?? 260}/></span>}
+        </h3>
         {target != null && (
           <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--ink-muted)', background: 'var(--bg)', border: '1px solid var(--line)', borderRadius: 6, padding: '2px 8px', lineHeight: 1.6, whiteSpace: 'nowrap', marginLeft: 8 }}>
             Target : {target}

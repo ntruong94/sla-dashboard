@@ -37,6 +37,9 @@ async function connectDB() {
   if (_pool) return _pool;
   try {
     _pool = await sql.connect(config);
+    // Attach an error listener so pool-level errors (e.g. timeout during cache warm-up)
+    // don't propagate as unhandled EventEmitter 'error' events and crash the process.
+    _pool.on('error', err => console.error('[pool error]', err.message));
     console.log('Connected to SQL Server');
     return _pool;
   } catch (err) {

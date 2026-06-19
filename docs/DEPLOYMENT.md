@@ -5,10 +5,10 @@
 > | Layer | Where it runs | URL |
 > |-------|--------------|-----|
 > | Frontend (React + Vite) | **Vercel** (auto-deploys on `git push`) | `https://sla.mezy.com.au` / `https://sla-dashboard.vercel.app` |
-> | Backend (Node + Express) | **Your local PC** — exposed via **ngrok static domain** | `https://balmy-accurate-handpick.ngrok-free.app` |
+> | Backend (Node + Express) | **Railway** if the database is reachable from the cloud | `https://<your-railway-service>.up.railway.app` |
 > | Database (SQL Server) | **Your local PC** (`MySEReport`) | reachable only from `localhost` — never the internet |
 >
-> **Why the backend stays local:** SQL Server (`MySEReport`) is on the same machine. Migrating the DB to the cloud is a separate project. The ngrok static domain provides a stable public HTTPS URL that does NOT change on restart (unlike the old trycloudflare random URLs).
+> **Important:** Railway can host the Node API, but it cannot reach a SQL Server that only listens on `localhost`. To use Railway end-to-end, the database must also be reachable from the cloud or moved to a hosted database.
 
 ---
 
@@ -21,20 +21,58 @@
 [Vercel — frontend static build]
         │  HTTPS API calls to VITE_API_BASE
         ▼
-[ngrok static tunnel — balmy-accurate-handpick.ngrok-free.app]
-        │  localhost:5000
+[Railway — Node.js backend service]
+        │  HTTPS / environment variables
         ▼
-[Node.js backend — server.js  (your PC)]
-        │  TCP 1433 (localhost only)
-        ▼
-[SQL Server — MySEReport  (your PC)]
+[SQL Server — MySEReport]
 ```
 
 ---
 
-## 2. Daily startup — keep the backend live
+## 2. Railway backend — recommended for user testing
 
-Every workday, run these two commands on your PC before users arrive.
+This gives you a stable backend URL without buying an API domain, but it only works end-to-end if the database is cloud-reachable.
+
+### Step 1 — Create the Railway service from GitHub
+1. Open Railway and create a new project from your GitHub repo.
+2. Add a service for the repository.
+3. Set the service **Root Directory** to `backend`.
+4. Let Railway use `backend/package.json` and `backend/server.js`.
+
+### Step 2 — Add Railway environment variables
+Set these on the Railway backend service:
+
+| Variable | Value |
+|----------|-------|
+| `DB_SERVER` | A SQL Server host reachable from Railway |
+| `DB_PORT` | `1433` |
+| `DB_DATABASE` | `MySEReport` |
+| `DB_USER` | Your SQL login |
+| `DB_PASSWORD` | Your SQL password |
+| `JWT_SECRET` | A strong random secret |
+| `ALLOWED_ORIGINS` | `https://sla-dashboard.vercel.app,https://sla-dashboard-mezyproject2026.vercel.app,http://localhost:5173,http://localhost:5174` |
+| `NODE_ENV` | `production` |
+
+### Step 3 — Copy the Railway public URL into the frontend
+After Railway deploys, copy the generated service URL and set it as:
+
+| Variable | Value |
+|----------|-------|
+| `VITE_API_BASE` | `https://<your-railway-service>.up.railway.app` |
+
+### Step 4 — Verify the backend
+Check the Railway URL directly:
+- `GET /api/health` should return `{ "status": "OK" }`
+- Login should work from the Vercel frontend
+- Dashboard data should load with no CORS errors
+
+If the database stays on your PC and is not exposed to Railway, this deployment will not be able to load data.
+
+---
+
+## 3. Daily startup — keep the backend live
+
+If you keep the backend running locally as a fallback, run these two commands on your PC before users arrive.
 
 ### Step 1 — Start the backend
 ```powershell
@@ -54,14 +92,14 @@ Connected to SQL Server
 & "$env:USERPROFILE\ngrok.exe" http --domain=balmy-accurate-handpick.ngrok-free.app 5000
 ```
 > The ngrok free static domain (`balmy-accurate-handpick.ngrok-free.app`) does not change as long as you use the same ngrok account.
-> Cloudflare Named Tunnels (see Section 7) are the permanent alternative — they restart automatically as a Windows service.
+> Cloudflare Named Tunnels (see Section 8) are the optional local-hosted alternative — they restart automatically as a Windows service.
 
 ### Step 3 — Open the dashboard
 `https://sla.mezy.com.au` (or `https://sla-dashboard.vercel.app`)
 
 ---
 
-## 3. Frontend deployment (Vercel) — one-time setup
+## 4. Frontend deployment (Vercel) — one-time setup
 
 This is **already configured** (`origin/main` → Vercel auto-deploy).
 Re-do only if you need to set it up from scratch.
@@ -72,16 +110,16 @@ Re-do only if you need to set it up from scratch.
 4. **Output directory:** `dist` (auto-detected)
 5. Add Environment Variable:
    - **Name:** `VITE_API_BASE`
-   - **Value:** `https://balmy-accurate-handpick.ngrok-free.app`
+        - **Value:** `https://<your-railway-service>.up.railway.app`
    - **Environment:** Production (+ Preview if desired)
-6. Add custom domain: `sla.mezy.com.au` → point DNS CNAME to `cname.vercel-dns.com`.
+6. Skip the custom domain step if you only want user testing.
 7. Vercel auto-enables HTTPS via Let's Encrypt.
 
 > Every `git push` to `main` triggers a new Vercel build automatically.
 
 ---
 
-## 4. Backend environment variables (local `.env`)
+## 5. Backend environment variables (local `.env`)
 
 The backend reads all secrets from `backend/.env` (never committed to git).
 See `backend/.env.example` for the full list of keys.
@@ -96,7 +134,7 @@ Critical variables:
 | `DB_USER` | SQL login username | *(set in .env — not here)* |
 | `DB_PASSWORD` | SQL login password | *(set in .env — not here)* |
 | `JWT_SECRET` | JWT signing key (≥32 chars) | *(set in .env — not here)* |
-| `ALLOWED_ORIGINS` | Comma-separated frontend URLs | `https://sla.mezy.com.au,...` |
+| `ALLOWED_ORIGINS` | Comma-separated frontend URLs | `https://sla-dashboard.vercel.app,https://sla-dashboard-mezyproject2026.vercel.app,...` |
 | `NODE_ENV` | `development` or `production` | `production` on live server |
 | `PORT` | Listening port | `5000` |
 
@@ -107,19 +145,19 @@ node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 
 ---
 
-## 5. Vercel environment variables (production frontend)
+## 6. Vercel environment variables (production frontend)
 
 Set in Vercel dashboard → Project → Settings → Environment Variables:
 
 | Variable | Value |
 |----------|-------|
-| `VITE_API_BASE` | The full backend tunnel URL (no trailing slash) |
+| `VITE_API_BASE` | The full Railway backend URL (no trailing slash) |
 
-> When the ngrok tunnel URL changes (only if you close the old tunnel and open a new one), update this value in Vercel and redeploy (or just push any trivial commit to trigger a rebuild).
+> When the backend URL changes, update this value in Vercel and redeploy (or just push any trivial commit to trigger a rebuild).
 
 ---
 
-## 6. Security hardening applied (2026-06-15)
+## 7. Security hardening applied (2026-06-15)
 
 All changes are in `backend/server.js`. No breaking changes to dashboard behaviour.
 
@@ -134,7 +172,7 @@ All changes are in `backend/server.js`. No breaking changes to dashboard behavio
 
 ---
 
-## 7. Upgrading to a Cloudflare Named Tunnel (recommended for 24/7 uptime)
+## 8. Upgrading to a Cloudflare Named Tunnel (optional)
 
 A Cloudflare Named Tunnel runs as a **Windows service** — it starts automatically when your PC boots and reconnects after network interruptions. No terminal window needed.
 
@@ -172,7 +210,7 @@ After this, users access `https://sla.mezy.com.au` (frontend on Vercel) which ca
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
@@ -186,7 +224,7 @@ After this, users access `https://sla.mezy.com.au` (frontend on Vercel) which ca
 
 ---
 
-## 9. What is NOT deployed to the cloud
+## 10. What is NOT deployed to the cloud
 
 | Item | Why kept local |
 |------|---------------|
@@ -196,7 +234,7 @@ After this, users access `https://sla.mezy.com.au` (frontend on Vercel) which ca
 
 ---
 
-## 10. Credential rotation checklist
+## 11. Credential rotation checklist
 
 If you suspect a secret has been exposed, rotate in this order:
 

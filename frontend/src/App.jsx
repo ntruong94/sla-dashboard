@@ -37,16 +37,32 @@ function normalizeTask(t, settings = {}) {
   const atRisk  = (settings.atRiskPct ?? 87.5) / 100;
   const pct     = slaH > 0 ? tatH / slaH : 0;
   const status  = pct > 1 ? 'bad' : pct >= atRisk ? 'warn' : 'ok';
+  
+  // Prefer a real person name; AssignedTo can point at a staff group like "Settlement Team".
+  const isLoanStatusTeam = t.QueueId === 5 || t.QueueId === 6;
+  const assignedStaffName = (!t.AssignedToIsGroup && t.StaffFullName && t.StaffFullName.trim()) ? t.StaffFullName.trim() : '';
+  const createdByName = (!t.CreatedByIsGroup && t.CreatedByFullName && t.CreatedByFullName.trim()) ? t.CreatedByFullName.trim() : '';
+  const staffName = assignedStaffName || createdByName || '';
+  const loanStatusDetail = [t.TaskName, t.ConfigLoanStatusName].filter(Boolean).join(' / ');
+  const desc = isLoanStatusTeam 
+    ? (staffName || t.TaskName || 'Unnamed Task')
+    : (staffName || t.TaskName || 'Unnamed Task');
+  const client = isLoanStatusTeam
+    ? (loanStatusDetail || t.ShortDescription || '-')
+    : (t.TaskName || t.ClientName || t.AssignedToName || '-');
+  
   return {
     id:       `T-${t.TaskID}`,
-    desc:     (t.StaffFullName && t.StaffFullName.trim()) ? t.StaffFullName.trim() : (t.TaskName || 'Unnamed Task'),
-    client:   t.TaskName || t.ClientName || t.AssignedToName || '-',
+    desc,
+    client,
     status,
     tatHours: tatH,
     priority: t.Priority === 'high' ? 'high' : t.Priority === 'med' ? 'med' : 'low',
     target:   slaH,
     teamId:   t.QueueId,
     teamName: t.QueueName,
+    createDte:      t.CreateDte || null,
+    slaAdjustedDte: t.SLAAdjustedDte || null,
   };
 }
 
@@ -148,6 +164,7 @@ export default function App() {
   const [kpi, setKpi]                 = useState({ totalTasks: 0, overallSla: 0, avgTat: 0, totalOverdue: 0, deltas: { totalTasks: 0, overallSla: 0, avgTat: 0, totalOverdue: 0 } });
   const [teams, setTeams]             = useState([]);
   const [rawTasks, setRawTasks]       = useState([]);
+  const [modalRawTasks, setModalRawTasks] = useState([]);
   const [history, setHistory]         = useState(null);
   const [alerts, setAlerts]           = useState([]);
   const [loanSummary, setLoanSummary] = useState({ received: { count: 0, amount: 0, deltas: { count: 0, amount: 0 } }, approved: { count: 0, amount: 0, deltas: { count: 0, amount: 0 } }, settled: { count: 0, amount: 0, deltas: { count: 0, amount: 0 } } });
@@ -206,13 +223,15 @@ export default function App() {
       getKpiSummary(targets),
       getTeams(targets),
       getTasks(),
+      getTasks(null, null, 'today'),
       getAlerts(targets),
       getLoanSummary(),
     ])
-      .then(([kpiData, teamsData, tasksData, alertsData, loanData]) => {
+      .then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {
         setKpi(kpiData);
         setTeams(teamsData);
         setRawTasks(tasksData);
+        setModalRawTasks(modalTasksData);
         setAlerts(alertsData);
         setLoanSummary(loanData);
         setLastRefresh(new Date());
@@ -234,13 +253,15 @@ export default function App() {
       getKpiSummary(targets),
       getTeams(targets),
       getTasks(),
+      getTasks(null, null, 'today'),
       getAlerts(targets),
       getLoanSummary(),
     ])
-      .then(([kpiData, teamsData, tasksData, alertsData, loanData]) => {
+      .then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {
         setKpi(kpiData);
         setTeams(teamsData);
         setRawTasks(tasksData);
+        setModalRawTasks(modalTasksData);
         setAlerts(alertsData);
         setLoanSummary(loanData);
         setLastRefresh(new Date());
@@ -248,7 +269,7 @@ export default function App() {
         setTimeout(() => setJustRefreshed(false), 800);
         setLoading(false);
         // Load history separately — won't block dashboard if slow or fails
-        getHistory('90d', targets)
+        getHistory('400d', targets)
           .then(historyData => setHistory(normalizeHistory(historyData, teamsData)))
           .catch(err => console.warn('[history] failed to load:', err.message));
       })
@@ -290,18 +311,20 @@ export default function App() {
       getKpiSummary(targets),
       getTeams(targets),
       getTasks(),
+      getTasks(null, null, 'today'),
       getAlerts(targets),
       getLoanSummary(),
-    ]).then(([kpiData, teamsData, tasksData, alertsData, loanData]) => {
+    ]).then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {
       setKpi(kpiData);
       setTeams(teamsData);
       setRawTasks(tasksData);
+      setModalRawTasks(modalTasksData);
       setAlerts(alertsData);
       setLoanSummary(loanData);
       setLastRefresh(new Date());
     }).catch(err => console.warn('[settings refresh] failed:', err.message));
     // Refresh history with new targets (uses warm cache for non-custom, fresh for custom)
-    getHistory('90d', targets)
+    getHistory('400d', targets)
       .then(historyData => setHistory(normalizeHistory(historyData, teamsRef.current)))
       .catch(err => console.warn('[settings history refresh] failed:', err.message));
   }, []);
@@ -317,20 +340,17 @@ export default function App() {
   const availableMonths           = useMemo(() => getAvailableMonthsFromHistory(history), [history]);
   // Settings-aware derived state — recomputes automatically when settings or raw data changes
   const tasksByTeam  = useMemo(() => groupTasksByTeam(rawTasks, settings), [rawTasks, settings]);
+  const modalTasksByTeam = useMemo(() => groupTasksByTeam(modalRawTasks, settings), [modalRawTasks, settings]);
   const teamsDisplay = useMemo(() => teams.map(team => {
     const customTarget = settings.targets[team.id];
     if (!customTarget) return team;
-    const teamTasks = tasksByTeam[team.id] || [];
-    // Only recalculate overdue count using the custom target.
-    // SLA% always comes from the backend (DateCompleted-based) and is never overridden client-side.
-    const overdue = teamTasks.filter(t => {
-      const task = rawTasks.find(r => r.TaskID === t.TaskID);
-      return task && task.TotalHoursOnTask > customTarget;
-    }).length;
-    return { ...team, target: customTarget, overdue };
-  }), [teams, tasksByTeam, rawTasks, settings.targets]);
+    // Only override the display target. The backend already received the custom targets
+    // and computed overdue/sla correctly in SQL — no client-side recalculation needed.
+    return { ...team, target: customTarget };
+  }), [teams, settings.targets]);
   const modalTeam  = teamsDisplay.find(t => t.id === modalTeamId) ?? null;
-  const modalTasks = modalTeam ? (tasksByTeam[modalTeam.id] || []).slice(0, settings.modalTaskCount) : [];
+  const modalTaskLimit = modalTeam ? Math.min(settings.modalTaskCount, modalTeam.volume ?? settings.modalTaskCount) : settings.modalTaskCount;
+  const modalTasks = modalTeam ? (modalTasksByTeam[modalTeam.id] || []).slice(0, modalTaskLimit) : [];
 
   // AEST time strings
   const timeFmt    = now.toLocaleTimeString('en-AU', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Australia/Sydney' });
@@ -450,6 +470,7 @@ export default function App() {
                 amtDelta={loanSummary.received.deltas.amount}
                 target={settings.loanTargets?.received ?? 10}
                 onClick={() => openLoanModal('received', 'Application Received')}
+                tooltip={TOOLTIPS.loan.received}
               />
               <LoanKpiTile
                 label="Funder Approvals"
@@ -459,6 +480,7 @@ export default function App() {
                 amtDelta={loanSummary.approved.deltas.amount}
                 target={settings.loanTargets?.approved ?? 10}
                 onClick={() => openLoanModal('approved', 'Funder Approvals')}
+                tooltip={TOOLTIPS.loan.approved}
               />
               <LoanKpiTile
                 label="Settlements"
@@ -468,6 +490,7 @@ export default function App() {
                 amtDelta={loanSummary.settled.deltas.amount}
                 target={settings.loanTargets?.settled ?? 10}
                 onClick={() => openLoanModal('settled', 'Settlements')}
+                tooltip={TOOLTIPS.loan.settled}
               />
             </section>
 
@@ -507,41 +530,41 @@ export default function App() {
                     <TeamCard key={t.id} team={t} onClick={() => setModalTeamId(t.id)}/>
                   ))}
                 </div>
+
+                {/* Trend chart */}
+                {dayLabels.length > 0 && (
+                  <section className="trend-card" style={{ marginTop: 12 }}>
+                    <div className="trend-head">
+                      <div>
+                        <h2 className="section-title">7-Day SLA Compliance Trend<InfoTip text={TOOLTIPS.chart.trend} width={280}/></h2>
+                        <div className="section-sub">Rolling SLA % per team &middot; hover for detail</div>
+                      </div>
+                      <div className="chart-legend">
+                        {activeTeams(teamsDisplay, trendData).map(t => (
+                          <span key={t.id}
+                            className={`legend-item ${dimmedTeams.has(t.id) ? 'dim' : ''}`}
+                            title="Click to show or hide this team's trend line"
+                            onClick={() => toggleDim(t.id)}>
+                            <span className="legend-swatch" style={{ background: TEAM_COLORS[t.name] }}/>
+                            {t.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <TrendChart
+                      teams={teamsDisplay}
+                      trendData={trendData}
+                      dimmed={dimmedTeams}
+                      onLegendClick={toggleDim}
+                      dayLabels={dayLabels}
+                    />
+                  </section>
+                )}
               </div>
               <AlertsPanel alerts={alerts} onDismiss={dismissAlert}
                 atRiskPct={settings.atRiskPct} maxTasks={settings.modalTaskCount}
-                customTargets={settings.targets}/>
+                customTargets={settings.targets} enableDrillDown={false}/>
             </section>
-
-            {/* Trend chart */}
-            {dayLabels.length > 0 && (
-              <section className="trend-card">
-                <div className="trend-head">
-                  <div>
-                    <h2 className="section-title">7-Day SLA Compliance Trend<InfoTip text={TOOLTIPS.chart.trend} width={280}/></h2>
-                    <div className="section-sub">Rolling SLA % per team &middot; hover for detail</div>
-                  </div>
-                  <div className="chart-legend">
-                    {activeTeams(teamsDisplay, trendData).map(t => (
-                      <span key={t.id}
-                        className={`legend-item ${dimmedTeams.has(t.id) ? 'dim' : ''}`}
-                        title="Click to show or hide this team's trend line"
-                        onClick={() => toggleDim(t.id)}>
-                        <span className="legend-swatch" style={{ background: TEAM_COLORS[t.name] }}/>
-                        {t.name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <TrendChart
-                  teams={teamsDisplay}
-                  trendData={trendData}
-                  dimmed={dimmedTeams}
-                  onLegendClick={toggleDim}
-                  dayLabels={dayLabels}
-                />
-              </section>
-            )}
           </main>
         )}
 
@@ -565,7 +588,7 @@ export default function App() {
 
       {/* Task drill-down modal */}
       {modalTeam && (
-        <TaskModal team={modalTeam} tasks={modalTasks} onClose={closeModal} maxTasks={settings.modalTaskCount}/>
+        <TaskModal team={modalTeam} tasks={modalTasks} onClose={closeModal} maxTasks={modalTaskLimit}/>
       )}
 
       {/* Loan drill-down modal */}

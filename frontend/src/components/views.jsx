@@ -5,7 +5,7 @@ import { AlertsPanel, InfoTip } from './components.jsx';
 import { fmtHMS } from './utils.js';
 import { TEAM_COLORS, slaClass, slaLabel, TOOLTIPS } from '../constants.js';
 import { activeTeams } from '../chartUtils.js';
-import { getAdminUsers, approveUser, rejectUser, getStaffDepartments, getStaffByDepartment } from '../api.js';
+import { getAdminUsers, approveUser, rejectUser, removeUser, getStaffDepartments, getStaffAbsentToday, getStaffByDepartment } from '../api.js';
 
 // Additional views for sidebar nav routing
 
@@ -17,7 +17,7 @@ const TeamsView = ({ teams, onOpenTeam }) => {
         <div>
           <div className="crumb">Operations</div>
           <h1 className="page-title">All Teams</h1>
-          <div className="page-sub">{teams.length} operational teams · sorted by SLA performance</div>
+          <div className="page-sub">{teams.length} operational teams</div>
         </div>
       </div>
 
@@ -36,7 +36,7 @@ const TeamsView = ({ teams, onOpenTeam }) => {
             </tr>
           </thead>
           <tbody>
-            {[...teams].sort((a,b) => a.sla - b.sla).map(t => {
+            {[...teams].sort((a,b) => a.id - b.id).map(t => {
               const cls = slaClass(t.sla);
               return (
                 <tr key={t.id} onClick={() => onOpenTeam(t.id)} style={{cursor:'pointer'}}>
@@ -139,6 +139,8 @@ const TasksView = ({ teams, tasks }) => {
           <thead>
             <tr>
               <th style={{width:110}}>Task ID</th>
+              <th style={{width:120}}>Create Dte</th>
+              <th style={{width:140}}>SLAAdjusted Dte</th>
               <th>Description</th>
               <th style={{width:140}}>Team</th>
               <th style={{width:110}}>Status</th>
@@ -148,7 +150,7 @@ const TasksView = ({ teams, tasks }) => {
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan="6" style={{textAlign:'center',padding:48,color:'var(--ink-muted)'}}>No tasks match the current filter.</td></tr>
+              <tr><td colSpan="8" style={{textAlign:'center',padding:48,color:'var(--ink-muted)'}}>No tasks match the current filter.</td></tr>
             ) : filtered.map(t => {
               const rowCls = t.status === 'bad' ? 'overdue-row' : t.status === 'warn' ? 'risk-row' : 'on-track-row';
               const statusLabel = t.status === 'ok' ? 'On Track' : t.status === 'warn' ? 'At Risk' : 'Overdue';
@@ -157,6 +159,8 @@ const TasksView = ({ teams, tasks }) => {
               return (
                 <tr key={t.teamId + '-' + t.id} className={rowCls}>
                   <td><span className="task-id">{t.id}</span></td>
+                  <td><span className="soft">{t.createDte || '-'}</span></td>
+                  <td><span className="soft">{t.slaAdjustedDte || '-'}</span></td>
                   <td>
                     <div className="task-desc-main">{t.desc}</div>
                     <div className="task-client">{t.client}</div>
@@ -193,6 +197,7 @@ const TasksView = ({ teams, tasks }) => {
 const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }) => {
   // range: '7d' | '30d' | '90d' | { year, month }
   const [range, setRange] = React.useState('30d');
+  const [comparePreset, setComparePreset] = React.useState('current'); // current | lastYear
 
   const slice = React.useMemo(() => {
     if (!history) return null;
@@ -224,6 +229,37 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
   }, [history, range]);
 
   const months = availableMonths;
+  const isPresetRange = typeof range === 'string';
+
+  const samePeriodLastYearSlice = React.useMemo(() => {
+    if (!history || !isPresetRange || !slice || slice.dates.length === 0) return null;
+    const currentDates = slice.dates;
+    if (currentDates.length === 0) return null;
+
+    const start = currentDates[0];
+    const end = currentDates[currentDates.length - 1];
+    const startLy = new Date(start);
+    const endLy = new Date(end);
+    startLy.setFullYear(startLy.getFullYear() - 1);
+    endLy.setFullYear(endLy.getFullYear() - 1);
+
+    const lyIdx = history.dates
+      .map((d, i) => ({ d, i }))
+      .filter(x => x.d >= startLy && x.d <= endLy)
+      .map(x => x.i);
+
+    if (lyIdx.length === 0) return null;
+
+    const slicedDates = lyIdx.map(i => history.dates[i]);
+    const slicedByTeam = {};
+    for (const [k, v] of Object.entries(history.byTeam)) {
+      slicedByTeam[k] = lyIdx.map(i => v[i] ?? null);
+    }
+    return { dates: slicedDates, byTeam: slicedByTeam };
+  }, [history, isPresetRange, slice]);
+
+  const displaySlice = isPresetRange && comparePreset === 'lastYear' ? samePeriodLastYearSlice : slice;
+  const showingLastYear = isPresetRange && comparePreset === 'lastYear';
 
   const rangeLabel = (() => {
     if (range === '7d') return 'Last 7 days';
@@ -234,14 +270,15 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
   })();
 
   const rangeSub = (() => {
-    if (!slice || slice.dates.length === 0) return '';
-    const first = slice.dates[0].toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
-    const last = slice.dates[slice.dates.length - 1].toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
-    return `${first} → ${last} · ${slice.dates.length} days`;
+    const src = displaySlice;
+    if (!src || src.dates.length === 0) return '';
+    const first = src.dates[0].toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+    const last = src.dates[src.dates.length - 1].toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+    return `${first} → ${last} · ${src.dates.length} days${showingLastYear ? ' · same period last year' : ''}`;
   })();
 
   const tableRows = teams.map(t => {
-    const raw = slice && slice.byTeam[t.id] ? slice.byTeam[t.id] : [];
+    const raw = displaySlice && displaySlice.byTeam[t.id] ? displaySlice.byTeam[t.id] : [];
     const arr = raw.filter(v => v != null && !Number.isNaN(v));  // exclude missing data
     if (arr.length === 0) return { team: t, avg: 0, min: 0, max: 0, delta: 0, arr: [] };
     const avg = Math.round(arr.reduce((a, b) => a + b, 0) / arr.length);
@@ -287,16 +324,27 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
             })}
           </div>
         </div>
+        {isPresetRange && (
+          <div className="filter-group">
+            <span className="filter-label">Compare</span>
+            <div className="seg seg-wide">
+              <button className={`seg-btn ${comparePreset === 'current' ? 'active' : ''}`}
+                onClick={() => setComparePreset('current')}>Current</button>
+              <button className={`seg-btn ${comparePreset === 'lastYear' ? 'active' : ''}`}
+                onClick={() => setComparePreset('lastYear')}>Last Year</button>
+            </div>
+          </div>
+        )}
       </div>
 
       <section className="trend-card" style={{padding:'24px 28px 20px', overflow:'visible'}}>
         <div className="trend-head">
           <div>
             <h2 className="section-title">Compliance · {rangeLabel}</h2>
-            <div className="section-sub">Click a team in the legend to dim its line</div>
+            <div className="section-sub">Click a team in the legend to dim its line{showingLastYear ? ' · showing same period last year' : ''}</div>
           </div>
           <div className="chart-legend">
-            {activeTeams(teams, slice?.byTeam || {}).map(t => (
+            {activeTeams(teams, displaySlice?.byTeam || {}).map(t => (
               <span key={t.id} className={`legend-item ${dimmedTeams.has(t.id) ? 'dim' : ''}`} onClick={() => toggleDim(t.id)}>
                 <span className="legend-swatch" style={{background:TEAM_COLORS[t.name]}}/>
                 {t.name}
@@ -304,10 +352,17 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
             ))}
           </div>
         </div>
-        {slice ? (
-          <HistoryChart teams={teams} slice={slice} dimmed={dimmedTeams}/>
+        {displaySlice ? (
+          <HistoryChart
+            teams={teams}
+            slice={displaySlice}
+            dimmed={dimmedTeams}
+            compactDots={range === '30d'}
+          />
         ) : (
-          <div style={{padding:60,textAlign:'center',color:'var(--ink-muted)'}}>No history available for this month.</div>
+          <div style={{padding:60,textAlign:'center',color:'var(--ink-muted)'}}>
+            {showingLastYear ? 'No same-period last-year data available.' : 'No history available for this month.'}
+          </div>
         )}
       </section>
 
@@ -390,7 +445,7 @@ const AlertsView = ({ alerts, onDismiss }) => {
           <div style={{color:'var(--ink-muted)',fontSize:10}}>No active alerts. All teams operating within thresholds.</div>
         </div>
       ) : (
-        <AlertsPanel alerts={alerts} onDismiss={onDismiss}/>
+        <AlertsPanel alerts={alerts} onDismiss={onDismiss} drillMode="table"/>
       )}
     </main>
   );
@@ -608,8 +663,11 @@ export { TeamsView, TasksView, ReportsView, AlertsView, SettingsView, StaffListV
 // ===== STAFF LIST VIEW — department staff counts with drill-through =====
 function StaffListView() {
   const [departments, setDepartments] = React.useState([]);
+  const [absentToday, setAbsentToday] = React.useState([]);
   const [loading, setLoading]         = React.useState(true);
+  const [absentLoading, setAbsentLoading] = React.useState(true);
   const [error, setError]             = React.useState('');
+  const [absentError, setAbsentError] = React.useState('');
   const [search, setSearch]           = React.useState('');
   const [drillDept, setDrillDept]     = React.useState(null); // { deptId, deptName } | null
   const [drillData, setDrillData]     = React.useState({ staff: [], loading: false, error: '' });
@@ -625,10 +683,29 @@ function StaffListView() {
 
   const load = React.useCallback(() => {
     setLoading(true);
+    setAbsentLoading(true);
     setError('');
-    getStaffDepartments()
-      .then(data => { setDepartments(data); setLoading(false); })
-      .catch(err  => { setError(err.message); setLoading(false); });
+    setAbsentError('');
+    Promise.allSettled([getStaffDepartments(), getStaffAbsentToday()])
+      .then(([deptRes, absentRes]) => {
+        if (deptRes.status === 'fulfilled') {
+          setDepartments(deptRes.value);
+        } else {
+          setDepartments([]);
+          setError(deptRes.reason?.message || 'Failed to load departments');
+        }
+
+        if (absentRes.status === 'fulfilled') {
+          setAbsentToday(absentRes.value);
+        } else {
+          setAbsentToday([]);
+          setAbsentError(absentRes.reason?.message || 'Failed to load absent staff');
+        }
+      })
+      .finally(() => {
+        setLoading(false);
+        setAbsentLoading(false);
+      });
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
@@ -694,32 +771,83 @@ function StaffListView() {
       )}
 
       {!loading && !error && (
-        <section className="trend-card" style={{ padding: '22px 26px' }}>
-          {filtered.length === 0 ? (
-            <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
-              {departments.length === 0 ? 'No departments found' : 'No departments match your search'}
+        <>
+          <section className="trend-card" style={{ padding: '22px 26px', marginBottom: 14 }}>
+            <div className="section-head" style={{ marginBottom: 10 }}>
+              <h2 className="section-title">Absent Today</h2>
+              <span className="section-sub">All staff absent today based on work status history</span>
             </div>
-          ) : (
-            <table className="teams-table">
-              <thead>
-                <tr>
-                  <th>Department ID</th>
-                  <th>Department Name</th>
-                  <th style={{ textAlign: 'right' }}>Total Staff Count</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(d => (
-                  <tr key={d.departmentId} onClick={() => openDrill(d)} style={{ cursor: 'pointer' }}>
-                    <td><span className="soft">{d.departmentId}</span></td>
-                    <td><strong>{d.departmentName || <em className="soft">—</em>}</strong></td>
-                    <td style={{ textAlign: 'right', fontWeight: 600 }}>{d.totalStaff}</td>
+
+            {absentLoading ? (
+              <div style={{ padding: '28px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+                Loading absent staff…
+              </div>
+            ) : absentError ? (
+              <div style={{ padding: '18px 0', textAlign: 'center', color: 'var(--bad)', fontSize: 13 }}>
+                {absentError}
+              </div>
+            ) : absentToday.length === 0 ? (
+              <div style={{ padding: '28px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+                No staff absent today
+              </div>
+            ) : (
+              <table className="teams-table">
+                <thead>
+                  <tr>
+                    <th>Staff ID</th>
+                    <th>Full Name</th>
+                    <th>Department Name</th>
+                    <th>Work Status Name</th>
+                    <th>StartedTime</th>
+                    <th>EndedTime</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </section>
+                </thead>
+                <tbody>
+                  {absentToday.map((r, idx) => (
+                    <tr key={`${r.staffId}-${r.startedTime}-${idx}`}>
+                      <td><span className="soft">{r.staffId}</span></td>
+                      <td><strong>{r.fullName || '—'}</strong></td>
+                      <td>{r.departmentName || '—'}</td>
+                      <td>{r.workStatusName || '—'}</td>
+                      <td className="soft">{r.startedTime || '—'}</td>
+                      <td className="soft">{r.endedTime || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+
+          <section className="trend-card" style={{ padding: '22px 26px' }}>
+            <div className="section-head" style={{ marginBottom: 10 }}>
+              <h2 className="section-title">All Deparments</h2>
+            </div>
+            {filtered.length === 0 ? (
+              <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+                {departments.length === 0 ? 'No departments found' : 'No departments match your search'}
+              </div>
+            ) : (
+              <table className="teams-table">
+                <thead>
+                  <tr>
+                    <th>Department ID</th>
+                    <th>Department Name</th>
+                    <th style={{ textAlign: 'right' }}>Total Staff Count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(d => (
+                    <tr key={d.departmentId} onClick={() => openDrill(d)} style={{ cursor: 'pointer' }}>
+                      <td><span className="soft">{d.departmentId}</span></td>
+                      <td><strong>{d.departmentName || <em className="soft">—</em>}</strong></td>
+                      <td style={{ textAlign: 'right', fontWeight: 600 }}>{d.totalStaff}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        </>
       )}
 
       {/* Drill-through modal */}
@@ -842,14 +970,29 @@ function AdminView() {
     }
   };
 
+  const doRemove = async (id) => {
+    if (!window.confirm('Permanently remove this user? They will need to sign up again.')) return;
+    setBusy(b => ({ ...b, [id]: 'removing' }));
+    try {
+      await removeUser(id);
+      setUsers(us => us.filter(u => u.id !== id));
+    } catch {
+      setMsgs(m => ({ ...m, [id]: 'error' }));
+    } finally {
+      setBusy(b => ({ ...b, [id]: null }));
+    }
+  };
+
   const STATUS_STYLE = {
     pending:  { background: 'color-mix(in srgb, var(--warn) 18%, transparent)', color: 'var(--warn)',  fontWeight: 600 },
     approved: { background: 'color-mix(in srgb, var(--ok)   18%, transparent)', color: 'var(--ok)',   fontWeight: 600 },
     rejected: { background: 'color-mix(in srgb, var(--bad)  18%, transparent)', color: 'var(--bad)',  fontWeight: 600 },
   };
 
-  const pending  = users.filter(u => u.status === 'pending');
-  const rest     = users.filter(u => u.status !== 'pending');
+  // Admin accounts are self-managed — exclude from all approval/rejection lists
+  const nonAdmin = users.filter(u => u.role !== 'admin');
+  const pending  = nonAdmin.filter(u => u.status === 'pending');
+  const rest     = nonAdmin.filter(u => u.status !== 'pending');
 
   return (
     <main className="content">
@@ -900,7 +1043,6 @@ function AdminView() {
                 <thead>
                   <tr>
                     <th>Email</th>
-                    <th>Company</th>
                     <th>Requested</th>
                     <th style={{ textAlign: 'center' }}>Status</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
@@ -910,7 +1052,6 @@ function AdminView() {
                   {pending.map(u => (
                     <tr key={u.id}>
                       <td><strong>{u.email}</strong></td>
-                      <td>{u.companyName}</td>
                       <td className="soft">{new Date(u.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
                       <td style={{ textAlign: 'center' }}>
                         <span style={{ ...STATUS_STYLE[u.status], padding: '2px 10px', borderRadius: 10, fontSize: 12, textTransform: 'capitalize' }}>
@@ -935,6 +1076,14 @@ function AdminView() {
                           >
                             {busy[u.id] === 'rejecting' ? 'Rejecting…' : 'Reject'}
                           </button>
+                          <button
+                            className="btn-secondary"
+                            style={{ padding: '5px 14px', fontSize: 12 }}
+                            disabled={!!busy[u.id]}
+                            onClick={() => doRemove(u.id)}
+                          >
+                            {busy[u.id] === 'removing' ? 'Removing…' : 'Remove'}
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -953,7 +1102,6 @@ function AdminView() {
                 <thead>
                   <tr>
                     <th>Email</th>
-                    <th>Company</th>
                     <th>Role</th>
                     <th>Joined</th>
                     <th style={{ textAlign: 'center' }}>Status</th>
@@ -964,7 +1112,6 @@ function AdminView() {
                   {rest.map(u => (
                     <tr key={u.id}>
                       <td><strong>{u.email}</strong></td>
-                      <td>{u.companyName}</td>
                       <td><span className="dept-tag">{u.role}</span></td>
                       <td className="soft">{new Date(u.createdAt).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</td>
                       <td style={{ textAlign: 'center' }}>
@@ -992,6 +1139,16 @@ function AdminView() {
                               onClick={() => doReject(u.id)}
                             >
                               {busy[u.id] === 'rejecting' ? 'Rejecting…' : 'Reject'}
+                            </button>
+                          )}
+                          {u.role !== 'admin' && (
+                            <button
+                              className="btn-secondary"
+                              style={{ padding: '5px 14px', fontSize: 12 }}
+                              disabled={!!busy[u.id]}
+                              onClick={() => doRemove(u.id)}
+                            >
+                              {busy[u.id] === 'removing' ? 'Removing…' : 'Remove'}
                             </button>
                           )}
                         </div>

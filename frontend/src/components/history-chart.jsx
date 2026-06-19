@@ -6,11 +6,17 @@ import { activeTeams, fmtAxisLabel, fmtTooltipDate, buildSmoothPath, computePctA
 // New chart that adapts to date range (7d / 30d / 90d / calendar month)
 // Renders dates dynamically — smart x-axis tick density based on range length.
 
-export const HistoryChart = ({ teams, slice, dimmed }) => {
+export const HistoryChart = ({ teams, slice, dimmed, compactDots = false }) => {
   const W = 980, H = 320;
   const pad = { top: 20, right: 28, bottom: 38, left: 48 };
   const innerW = W - pad.left - pad.right;
   const innerH = H - pad.top - pad.bottom;
+  const lineWidth = compactDots ? 2 : 2.5;
+  const dotRadius = compactDots ? 3.5 : 4;
+  const hoverDotRadius = compactDots ? 5 : 6;
+  const dotStrokeWidth = compactDots ? 1.75 : 2;
+  const hoverDotStrokeWidth = compactDots ? 2.25 : 2.5;
+  const plotOverflow = 8;
 
   const dates = slice.dates;
   const n = dates.length;
@@ -26,10 +32,16 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
   const axisTeams = seriesForAxis.length > 0 ? seriesForAxis : visibleTeams;
   const allVals = axisTeams.flatMap(t => slice.byTeam[t.id] || []);
   const { yMin, yMax, ticks: gridY } = computePctAxis(allVals, { fallbackMin: 55 });
+  const edgePad = 4;
+  const displayYMin = yMin <= 0 ? -edgePad : yMin;
+  const displayYMax = yMax >= 100 ? 100 + edgePad : yMax;
 
   const xStep = n > 1 ? innerW / (n - 1) : 0;
   const xAt = (i) => pad.left + i * xStep;
-  const yAt = (v) => pad.top + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
+  const yAt = (v) => pad.top + innerH - ((v - displayYMin) / (displayYMax - displayYMin)) * innerH;
+  const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+  const xDotAt = (i, radius) => clamp(xAt(i), pad.left + radius, W - pad.right - radius);
+  const yDotAt = (v, radius) => clamp(yAt(v), pad.top + radius, H - pad.bottom - radius);
 
   // Unique clipPath id — prevents collision when multiple charts mount.
   const clipId = 'history-clip-' + React.useId().replace(/:/g, '');
@@ -56,7 +68,7 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
 
   const smoothPath = (arr) => buildSmoothPath(arr, xAt, yAt);
 
-  const showDots = n <= 35;
+  const showDots = true;
 
   return (
     <div className="chart-wrap" ref={wrapRef}
@@ -66,7 +78,12 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
           {/* Clip rect locks all data graphics to the inner plot area so
               lines and dots can never overflow the chart edges. */}
           <clipPath id={clipId}>
-            <rect x={pad.left} y={pad.top} width={innerW} height={innerH} />
+            <rect
+              x={pad.left - plotOverflow}
+              y={pad.top - plotOverflow}
+              width={innerW + plotOverflow * 2}
+              height={innerH + plotOverflow * 2}
+            />
           </clipPath>
         </defs>
 
@@ -98,22 +115,7 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
           return (
             <g key={t.id} opacity={active ? 1 : 0.12}>
               <path d={smoothPath(arr)} fill="none" stroke={color}
-                strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-              {showDots && arr.map((v, i) => {
-                if (v == null || Number.isNaN(v)) return null;
-                if (v < yMin || v > yMax) return null;
-                return (
-                  <circle key={i} cx={xAt(i)} cy={yAt(v)}
-                    r={hoverIdx === i ? 5 : 3}
-                    fill="white" stroke={color}
-                    strokeWidth={hoverIdx === i ? 2.5 : 2}/>
-                );
-              })}
-              {!showDots && hoverIdx !== null && arr[hoverIdx] != null
-                && arr[hoverIdx] >= yMin && arr[hoverIdx] <= yMax && (
-                <circle cx={xAt(hoverIdx)} cy={yAt(arr[hoverIdx])}
-                  r="5" fill="white" stroke={color} strokeWidth="2.5"/>
-              )}
+                strokeWidth={lineWidth} strokeLinecap="round" strokeLinejoin="round"/>
             </g>
           );
         })}
@@ -123,6 +125,27 @@ export const HistoryChart = ({ teams, slice, dimmed }) => {
           <line x1={xAt(hoverIdx)} x2={xAt(hoverIdx)} y1={pad.top} y2={H - pad.bottom}
             stroke="rgba(0,0,0,0.10)" strokeDasharray="3 5" strokeWidth="1"/>
         )}
+
+        {visibleTeams.map(t => {
+          const arr = slice.byTeam[t.id];
+          if (!arr) return null;
+          const active = !dimmed.has(t.id);
+          const color = TEAM_COLORS[t.name];
+          return (
+            <g key={`top-${t.id}`} opacity={active ? 1 : 0.12}>
+              {arr.map((v, i) => {
+                if (v == null || Number.isNaN(v)) return null;
+                const radius = hoverIdx === i ? hoverDotRadius : dotRadius;
+                return (
+                  <circle key={i} cx={xDotAt(i, radius)} cy={yAt(v)}
+                    r={radius}
+                    fill="white" stroke={color}
+                    strokeWidth={hoverIdx === i ? hoverDotStrokeWidth : dotStrokeWidth}/>
+                );
+              })}
+            </g>
+          );
+        })}
       </svg>
 
       {hoverIdx !== null && wrapRef.current && ReactDOM.createPortal((() => {

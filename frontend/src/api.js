@@ -4,9 +4,10 @@ function getToken() { return localStorage.getItem('sla_token') || ''; }
 
 const EXTRA_HEADERS = import.meta.env.VITE_API_BASE?.includes('ngrok') ? { 'ngrok-skip-browser-warning': 'true' } : {};
 
-async function request(path) {
+async function request(path, options = {}) {
   const res = await fetch(BASE + path, {
-    headers: { 'Authorization': `Bearer ${getToken()}`, ...EXTRA_HEADERS },
+    ...options,
+    headers: { 'Authorization': `Bearer ${getToken()}`, ...EXTRA_HEADERS, ...(options.headers || {}) },
   });
   if (res.status === 401) {
     localStorage.removeItem('sla_token');
@@ -105,14 +106,17 @@ async function postAction(path) {
 export const getAdminUsers = ()   => request('/api/admin/users');
 export const approveUser   = (id) => postAction(`/api/admin/users/${id}/approve`);
 export const rejectUser    = (id) => postAction(`/api/admin/users/${id}/reject`);
+export const removeUser    = (id) => request(`/api/admin/users/${id}`, { method: 'DELETE' });
 
 export const getStaffDepartments  = ()       => request('/api/staff/departments');
+export const getStaffAbsentToday  = ()       => request('/api/staff/absent-today');
 export const getStaffByDepartment = (deptId) => request(`/api/staff/department/${deptId}`);
 
-export const getTasks = (teamId, status) => {
+export const getTasks = (teamId, status, scope) => {
   const params = new URLSearchParams();
   if (teamId != null) params.set('team', teamId);
   if (status)         params.set('status', status);
+  if (scope)          params.set('scope', scope);
   const qs = params.toString();
   return request('/api/tasks' + (qs ? '?' + qs : ''));
 };

@@ -1,5 +1,5 @@
 {
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
   "outputDirectory": "dist",
-  "buildCommand": "echo 'using committed dist'"
+  "buildCommand": "npm run build"
 }

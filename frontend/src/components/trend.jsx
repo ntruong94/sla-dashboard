@@ -10,6 +10,11 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
   const pad = { top: 24, right: 32, bottom: 42, left: 52 };
   const innerW = W - pad.left - pad.right;
   const innerH = H - pad.top - pad.bottom;
+  const dotRadius = 4;
+  const hoverDotRadius = 6;
+  const dotStrokeWidth = 2;
+  const hoverDotStrokeWidth = 2.5;
+  const plotOverflow = 8;
 
   // Only render/show teams that have at least one valid data point
   const visibleTeams = activeTeams(teams, trendData);
@@ -20,10 +25,16 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
   const axisTeams = seriesForAxis.length > 0 ? seriesForAxis : visibleTeams;
   const allVals = axisTeams.flatMap(t => trendData[t.id] || []);
   const { yMin, yMax, ticks: gridY } = computePctAxis(allVals);
+  const edgePad = 4;
+  const displayYMin = yMin <= 0 ? -edgePad : yMin;
+  const displayYMax = yMax >= 100 ? 100 + edgePad : yMax;
 
   const xStep = innerW / Math.max(dayLabels.length - 1, 1);
   const xAt = (i) => pad.left + i * xStep;
-  const yAt = (v) => pad.top + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
+  const yAt = (v) => pad.top + innerH - ((v - displayYMin) / (displayYMax - displayYMin)) * innerH;
+  const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+  const xDotAt = (i, radius) => clamp(xAt(i), pad.left + radius, W - pad.right - radius);
+  const yDotAt = (v, radius) => clamp(yAt(v), pad.top + radius, H - pad.bottom - radius);
 
   // Unique clipPath id so the chart never bleeds outside the plot area,
   // even when multiple charts are mounted on the same page.
@@ -45,8 +56,8 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
   const smoothPath = (arr) => buildSmoothPath(arr, xAt, yAt);
 
   // Target band 90–100 — only show where it intersects the visible range
-  const bandLo = Math.max(yMin, 90);
-  const bandHi = Math.min(yMax, 100);
+  const bandLo = Math.max(displayYMin, 90);
+  const bandHi = Math.min(displayYMax, 100);
   const showTargetBand = bandHi > bandLo;
 
   const textProps = {
@@ -65,7 +76,12 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
           {/* Clip rect locks all data graphics to the inner plot area so
               lines, dots and the target band can never overflow the chart. */}
           <clipPath id={clipId}>
-            <rect x={pad.left} y={pad.top} width={innerW} height={innerH} />
+            <rect
+              x={pad.left - plotOverflow}
+              y={pad.top - plotOverflow}
+              width={innerW + plotOverflow * 2}
+              height={innerH + plotOverflow * 2}
+            />
           </clipPath>
         </defs>
 
@@ -103,7 +119,7 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
           />
         )}
 
-        {/* Smooth lines + hollow dots — clipped to the inner plot area */}
+        {/* Smooth lines clipped to the inner plot area; dots rendered later on top */}
         <g clipPath={`url(#${clipId})`}>
         {visibleTeams.map(t => {
           const arr = trendData[t.id];
@@ -116,26 +132,10 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
                 d={smoothPath(arr)}
                 fill="none"
                 stroke={color}
-                strokeWidth="2"
+                strokeWidth="2.5"
                 strokeLinecap="round"
                 strokeLinejoin="round"
               />
-              {arr.map((v, i) => {
-                if (v == null || Number.isNaN(v)) return null;
-                // Skip dots that fall outside the visible Y-range so they
-                // don't get partially clipped at the chart edge.
-                if (v < yMin || v > yMax) return null;
-                return (
-                  <circle
-                    key={i}
-                    cx={xAt(i)} cy={yAt(v)}
-                    r={hoverIdx === i ? 5 : 3}
-                    fill="white"
-                    stroke={color}
-                    strokeWidth={hoverIdx === i ? 2.5 : 2}
-                  />
-                );
-              })}
             </g>
           );
         })}
@@ -150,6 +150,31 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
             strokeDasharray="3 4" strokeWidth="1"
           />
         )}
+
+        {visibleTeams.map(t => {
+          const arr = trendData[t.id];
+          if (!arr) return null;
+          const color = TEAM_COLORS[t.name];
+          const active = !dimmed.has(t.id);
+          return (
+            <g key={`top-${t.id}`} opacity={active ? 1 : 0.12}>
+              {arr.map((v, i) => {
+                if (v == null || Number.isNaN(v)) return null;
+                const radius = hoverIdx === i ? hoverDotRadius : dotRadius;
+                return (
+                  <circle
+                    key={i}
+                    cx={xDotAt(i, radius)} cy={yAt(v)}
+                    r={radius}
+                    fill="white"
+                    stroke={color}
+                    strokeWidth={hoverIdx === i ? hoverDotStrokeWidth : dotStrokeWidth}
+                  />
+                );
+              })}
+            </g>
+          );
+        })}
       </svg>
 
       {hoverIdx !== null && wrapRef.current && ReactDOM.createPortal((() => {
