@@ -783,6 +783,7 @@ app.get('/api/tasks', async (req, res) => {
     let query = `
       SELECT TOP 500
         t.TaskID,
+        t.ApplicationID,
         CONVERT(VARCHAR(10), t.DateCreated, 103) AS CreateDte,
         CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) AS SLAAdjustedDte,
         t.TaskName,
@@ -1105,6 +1106,7 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
       SELECT * FROM (
         SELECT TOP 25
           t.TaskID,
+          t.ApplicationID,
           CONVERT(VARCHAR(10), t.DateCreated, 103) AS CreateDte,
           CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) AS SLAAdjustedDte,
           t.ShortDescription,
@@ -1136,6 +1138,7 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
       SELECT * FROM (
         SELECT TOP 25
           t.TaskID,
+          t.ApplicationID,
           CONVERT(VARCHAR(10), t.DateCreated, 103) AS CreateDte,
           CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) AS SLAAdjustedDte,
           t.ShortDescription,
@@ -1689,10 +1692,12 @@ app.listen(PORT, async () => {
       await resolveEffectiveDate();
       setInterval(resolveEffectiveDate, 60 * 60 * 1000);
 
+      // History (90-day scan) is intentionally excluded from startup warmup.
+      // It is expensive on cold start and can exhaust the connection pool.
+      // It will be warmed on the first real request to /api/history.
       const warmups = [
-        ['kpi',     fetchKpiData],
-        ['teams',   fetchTeamsData],
-        ['history', () => fetchHistoryData('90d')],
+        ['kpi',   fetchKpiData],
+        ['teams', fetchTeamsData],
       ];
       for (const [key, fn] of warmups) {
         try {

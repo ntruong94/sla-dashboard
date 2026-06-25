@@ -650,27 +650,6 @@ SLA Dashboard/
 - `/api/tasks` SQL: adds `StaffFullName` computed column alongside the existing `AssignedToName` (FirstName only, kept for the secondary `client` line).
 - `/api/alert-tasks` SQL: adds `StaffFullName` to both UNION branches (overdue and at-risk).
 
-### Drill-Through UI Rules (2026-06-25)
-
-**Summary chips card order** (TaskModal — All Teams and Team Performance card drill-throughs):
-- Order is: **Volume → SLA % → Avg TAT → Overdue**
-- Volume appears before SLA % (changed 2026-06-25).
-
-**AVG TAT chip formatting:**
-- Value always formatted as **`h:mm:ss`** (hours : minutes : seconds), e.g. `9:36:00`.
-- Implemented in `fmtHMS()` in `components/utils.js` — converts decimal hours to total seconds then formats.
-- Font color is always **`#111` (near-black)** — forced via inline `style={{color: '#111'}}` on the `chip-value` div, so the danger/red chip class does not affect the text color.
-
-**APP ID column in drill-through tables:**
-- Column **App ID** appears immediately after **Task ID** in all task drill-through tables.
-- Same font class (`task-id`) and size as Task ID.
-- Applies to: TaskModal table (All Teams + Team Performance), AlertsPanel table drill-through.
-- Data source: `t.ApplicationID` — added to `SELECT` in `/api/tasks` and both UNION branches in `/api/alert-tasks` in `server.js`. Passed through `normalizeTask()` as `appId` field in `App.jsx`.
-- Displays `-` when `ApplicationID` is null.
-
-**Column widths (task drill-through tables)** — adjusted 2026-06-25 to fit the extra App ID column:
-- Task ID: 90px · App ID: 100px · Create Dte: 100px · SLAAdjusted Dte: 120px · Description: flexible · Status: 90px · TAT vs Target: 180px · Priority: 80px
-
 ### Chart Rendering Rules (2026-06-15)
 
 > **Applies to all SVG charts in the dashboard** — currently `TrendChart` (`trend.jsx`) and `HistoryChart` (`history-chart.jsx`). Any future chart MUST follow these rules.

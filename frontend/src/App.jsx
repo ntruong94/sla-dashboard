@@ -33,8 +33,10 @@ const DEFAULT_SETTINGS = { targets: {}, refreshMin: 5, atRiskPct: 87.5, modalTas
 function normalizeTask(t, settings = {}) {
   // Use RealtimeTAT (DATEDIFF computed in SQL) when available; fall back to stored TotalHoursOnTask.
   const tatH    = t.RealtimeTAT != null ? t.RealtimeTAT : (t.TotalHoursOnTask ?? 0);
-  const baseSla = t.SLAInHours || 4;          // fall back to 4h if NULL/0
-  const slaH    = settings.targets?.[t.QueueId] || baseSla;
+  // Use the team-level SLA target (from Settings, else 4h default).
+  // Per-task t.SLAInHours varies by task type and must NOT be used here — it causes
+  // the status badge and the progress bar to evaluate against different targets.
+  const slaH    = settings.targets?.[t.QueueId] || 4;
   const atRisk  = (settings.atRiskPct ?? 87.5) / 100;
   const pct     = slaH > 0 ? tatH / slaH : 0;
   const status  = pct > 1 ? 'bad' : pct >= atRisk ? 'warn' : 'ok';
@@ -54,6 +56,7 @@ function normalizeTask(t, settings = {}) {
   
   return {
     id:       `T-${t.TaskID}`,
+    appId:    t.ApplicationID ?? null,
     desc,
     client,
     status,

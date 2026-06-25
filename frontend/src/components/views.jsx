@@ -340,7 +340,7 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
       <section className="trend-card" style={{padding:'24px 28px 20px', overflow:'visible'}}>
         <div className="trend-head">
           <div>
-            <h2 className="section-title">Compliance · {rangeLabel}</h2>
+            <h2 className="section-title">Compliance · {rangeLabel}<InfoTip text={TOOLTIPS.chart.history} width={280}/></h2>
             <div className="section-sub">Click a team in the legend to dim its line{showingLastYear ? ' · showing same period last year' : ''}</div>
           </div>
           <div className="chart-legend">

@@ -273,13 +273,14 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                         <table className="task-table">
                           <thead>
                             <tr>
-                              <th style={{width: '110px'}}>Task ID</th>
-                              <th style={{width: '120px'}}>Create Dte</th>
-                              <th style={{width: '140px'}}>SLAAdjusted Dte</th>
+                              <th style={{width: '90px'}}>Task ID</th>
+                              <th style={{width: '100px'}}>App ID</th>
+                              <th style={{width: '100px'}}>Create Dte</th>
+                              <th style={{width: '120px'}}>SLAAdjusted Dte</th>
                               <th>Description</th>
-                              <th style={{width: '110px'}}>Status</th>
-                              <th style={{width: '220px'}}>TAT vs Target</th>
-                              <th style={{width: '100px'}}>Priority</th>
+                              <th style={{width: '90px'}}>Status</th>
+                              <th style={{width: '180px'}}>TAT vs Target</th>
+                              <th style={{width: '80px'}}>Priority</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -297,6 +298,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                               return (
                                 <tr key={t.TaskID + '-' + t.taskType} className={rowCls}>
                                   <td><span className="task-id">{t.TaskID}</span></td>
+                                  <td><span className="task-id">{t.ApplicationID != null ? t.ApplicationID : '-'}</span></td>
                                   <td><span className="soft">{t.CreateDte || '-'}</span></td>
                                   <td><span className="soft">{t.SLAAdjustedDte || '-'}</span></td>
                                   <td>
@@ -389,6 +391,7 @@ const TaskRow = ({ task, target }) => {
   return (
     <tr className={rowCls}>
       <td><span className="task-id">{task.id}</span></td>
+      <td><span className="task-id">{task.appId != null ? task.appId : '-'}</span></td>
       <td><span className="soft">{task.createDte || '-'}</span></td>
       <td><span className="soft">{task.slaAdjustedDte || '-'}</span></td>
       <td>
@@ -449,16 +452,16 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10 }) => {
           </div>
           <div className="modal-chips">
             <div className="chip">
-              <div className="chip-label">SLA %<InfoTip text={TOOLTIPS.modal.sla} width={260}/></div>
-              <div className="chip-value">{team.sla}<span className="unit">%</span></div>
-            </div>
-            <div className="chip">
               <div className="chip-label">Volume<InfoTip text={TOOLTIPS.modal.volume} width={220}/></div>
               <div className="chip-value">{team.volume}</div>
             </div>
+            <div className="chip">
+              <div className="chip-label">SLA %<InfoTip text={TOOLTIPS.modal.sla} width={260}/></div>
+              <div className="chip-value">{team.sla}<span className="unit">%</span></div>
+            </div>
             <div className={`chip ${team.avgTat > team.target ? 'danger' : ''}`}>
               <div className="chip-label">Avg TAT<InfoTip text={TOOLTIPS.modal.avgTat} width={240}/></div>
-              <div className="chip-value">{fmtHMS(team.avgTat)}</div>
+              <div className="chip-value" style={{color: '#111'}}>{fmtHMS(team.avgTat)}</div>
             </div>
             <div className="chip overdue danger">
               <div className="chip-label">Overdue<InfoTip text={TOOLTIPS.modal.overdue} width={240}/></div>
@@ -470,13 +473,14 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10 }) => {
           <table className="task-table">
             <thead>
               <tr>
-                <th style={{width: '110px'}}>Task ID</th>
-                <th style={{width: '120px'}}>Create Dte</th>
-                <th style={{width: '140px'}}>SLAAdjusted Dte</th>
+                <th style={{width: '90px'}}>Task ID</th>
+                <th style={{width: '100px'}}>App ID</th>
+                <th style={{width: '100px'}}>Create Dte</th>
+                <th style={{width: '120px'}}>SLAAdjusted Dte</th>
                 <th>Description</th>
-                <th style={{width: '110px'}}>Status</th>
-                <th style={{width: '220px'}}>TAT vs Target</th>
-                <th style={{width: '100px'}}>Priority</th>
+                <th style={{width: '90px'}}>Status</th>
+                <th style={{width: '180px'}}>TAT vs Target</th>
+                <th style={{width: '80px'}}>Priority</th>
               </tr>
             </thead>
             <tbody>
