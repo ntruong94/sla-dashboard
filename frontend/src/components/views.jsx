@@ -745,16 +745,6 @@ function StaffListView() {
             }
           </div>
         </div>
-        <input
-          type="text"
-          placeholder="Search department…"
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          style={{ marginLeft: 'auto', padding: '7px 12px', fontSize: 13, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--ink)', width: 220, outline: 'none' }}
-        />
-        <button className="btn-secondary" onClick={load} style={{ marginLeft: 10 }}>
-          Refresh
-        </button>
       </div>
 
       {loading && (
@@ -817,6 +807,19 @@ function StaffListView() {
               </table>
             )}
           </section>
+
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 10, margin: '14px 0 10px' }}>
+            <input
+              type="text"
+              placeholder="Search Department Name"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ padding: '7px 12px', fontSize: 13, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--ink)', width: 260, outline: 'none' }}
+            />
+            <button className="btn-secondary" onClick={load}>
+              Refresh
+            </button>
+          </div>
 
           <section className="trend-card" style={{ padding: '22px 26px' }}>
             <div className="section-head" style={{ marginBottom: 10 }}>

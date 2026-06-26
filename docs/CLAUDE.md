@@ -948,6 +948,14 @@ A read-only informational view accessible to all authenticated users. Placed in 
 - **Order:** Highest Total Staff Count first, then alphabetical by name
 - **Subtitle:** `There are total N departments in SoEzy` — N = `departments.length` (all rows returned by the query)
 
+### Search Box
+
+- **Placeholder:** `Search Department Name`
+- **Width:** 260px (sized to display full placeholder text)
+- **Position:** Between the Absent Today table and the All Departments table (below Absent Today section, above All Departments section). The Refresh button sits to the right of the search input in the same row.
+- **Scope:** Filters the **All Departments** table only — matches on `departmentId` or `departmentName` (case-insensitive). Does **not** filter the Absent Today table.
+- Implemented via `filtered` useMemo derived from `search` state.
+
 ### Drill-Through Modal
 
 Triggered by clicking any department row. Uses the existing `.modal-overlay` / `.modal` CSS pattern (same as `TaskModal`/`LoanModal`).
