@@ -138,19 +138,21 @@ const TasksView = ({ teams, tasks }) => {
         <table className="task-table">
           <thead>
             <tr>
-              <th style={{width:110}}>Task ID</th>
-              <th style={{width:120}}>Create Dte</th>
-              <th style={{width:140}}>SLAAdjusted Dte</th>
+              <th style={{width:90}}>Task ID</th>
+              <th style={{width:100}}>App ID</th>
+              <th style={{width:100}}>Create Dte</th>
+              <th style={{width:120}}>SLAAdjusted Dte</th>
               <th>Description</th>
-              <th style={{width:140}}>Team</th>
-              <th style={{width:110}}>Status</th>
-              <th style={{width:200}}>TAT vs Target</th>
-              <th style={{width:100}}>Priority</th>
+              <th style={{width:110}}>Current</th>
+              <th style={{width:130}}>Team</th>
+              <th style={{width:90}}>Status</th>
+              <th style={{width:180}}>TAT vs Target</th>
+              <th style={{width:80}}>Priority</th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan="8" style={{textAlign:'center',padding:48,color:'var(--ink-muted)'}}>No tasks match the current filter.</td></tr>
+              <tr><td colSpan="10" style={{textAlign:'center',padding:48,color:'var(--ink-muted)'}}>No tasks match the current filter.</td></tr>
             ) : filtered.map(t => {
               const rowCls = t.status === 'bad' ? 'overdue-row' : t.status === 'warn' ? 'risk-row' : 'on-track-row';
               const statusLabel = t.status === 'ok' ? 'On Track' : t.status === 'warn' ? 'At Risk' : 'Overdue';
@@ -158,27 +160,29 @@ const TasksView = ({ teams, tasks }) => {
               const pct = Math.min(t.tatHours / t.target, 1.6);
               return (
                 <tr key={t.teamId + '-' + t.id} className={rowCls}>
-                  <td><span className="task-id">{t.id}</span></td>
-                  <td><span className="soft">{t.createDte || '-'}</span></td>
-                  <td><span className="soft">{t.slaAdjustedDte || '-'}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.id}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.appId != null ? t.appId : '-'}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.createDte || '-'}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.slaAdjustedDte || '-'}</span></td>
                   <td>
                     <div className="task-desc-main">{t.desc}</div>
                     <div className="task-client">{t.client}</div>
                   </td>
-                  <td>
+                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.taskStatus || '-'}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}>
                     <span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:12,fontWeight:500}}>
                       <span style={{width:8,height:8,borderRadius:2,background:TEAM_COLORS[t.teamName]}}/>
                       {t.teamName}
                     </span>
                   </td>
-                  <td><span className={`pill ${t.status}`}><span className="pill-dot"/>{statusLabel}</span></td>
-                  <td>
+                  <td style={{whiteSpace:'nowrap'}}><span className={`pill ${t.status}`}><span className="pill-dot"/>{statusLabel}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}>
                     <div className="tat-cell">
                       <div className="t"><span className="mono">{t.tatHours.toFixed(1)}h</span><span className="vs">/ {t.target}h</span></div>
                       <div className="tat-bar"><div className={`progress-fill ${t.status}`} style={{width:`${Math.min(pct*100,100)}%`}}/></div>
                     </div>
                   </td>
-                  <td>
+                  <td style={{whiteSpace:'nowrap'}}>
                     <span className={`priority ${t.priority === 'high' ? 'high' : t.priority === 'med' ? 'med' : 'low'}`}>
                       <span className="dot"/>{prioLabel}
                     </span>

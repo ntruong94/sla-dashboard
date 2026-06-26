@@ -57,6 +57,7 @@ function normalizeTask(t, settings = {}) {
   return {
     id:       `T-${t.TaskID}`,
     appId:    t.ApplicationID ?? null,
+    taskStatus: t.TaskStatus || '',
     desc,
     client,
     status,

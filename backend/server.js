@@ -1098,7 +1098,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
       LEFT JOIN REPORT_Loans_Extension rle WITH (NOLOCK) ON t.ApplicationID = rle.ApplicationID
       LEFT JOIN ConfigLoanStatus       cls WITH (NOLOCK) ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId`;
     }
-    const staffJoin = `LEFT JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID${extraJoin}`;
+    const staffJoin = `LEFT JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+      LEFT JOIN ConfigTaskStatus ts WITH (NOLOCK) ON t.TaskStatusID = ts.ConfigTaskStatusID${extraJoin}`;
     // UNION guarantees both overdue (real-time TAT > SLA) and at-risk tasks are shown.
     // TAT = DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0 for all active tasks.
     // slaExpr: custom target hours from Settings if configured, else DB t.SLAInHours.
@@ -1124,7 +1125,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
             ELSE 0
           END AS overdueHours,
           'overdue' AS taskType,
-          RTRIM(ISNULL(s.FirstName,'') + ISNULL(' ' + s.Surname, '')) AS StaffFullName
+          RTRIM(ISNULL(s.FirstName,'') + ISNULL(' ' + s.Surname, '')) AS StaffFullName,
+          ISNULL(ts.TaskStatus, '') AS TaskStatus
         FROM Tasks t WITH (NOLOCK)
         ${staffJoin}
         WHERE t.TaskStatusID IN (1, 4, 5, 6)
@@ -1150,7 +1152,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
           t.OverDueComments,
           0 AS overdueHours,
           'atrisk' AS taskType,
-          RTRIM(ISNULL(s.FirstName,'') + ISNULL(' ' + s.Surname, '')) AS StaffFullName
+          RTRIM(ISNULL(s.FirstName,'') + ISNULL(' ' + s.Surname, '')) AS StaffFullName,
+          ISNULL(ts.TaskStatus, '') AS TaskStatus
         FROM Tasks t WITH (NOLOCK)
         ${staffJoin}
         WHERE t.TaskStatusID IN (1, 4, 5, 6)

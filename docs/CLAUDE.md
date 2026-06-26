@@ -667,12 +667,29 @@ SLA Dashboard/
 **APP ID column in drill-through tables:**
 - Column **App ID** appears immediately after **Task ID** in all task drill-through tables.
 - Same font class (`task-id`) and size as Task ID.
-- Applies to: TaskModal table (All Teams + Team Performance), AlertsPanel table drill-through.
+- Applies to: TaskModal table (All Teams + Team Performance), AlertsPanel table drill-through, TasksView (All Active Tasks page).
 - Data source: `t.ApplicationID` — added to `SELECT` in `/api/tasks` and both UNION branches in `/api/alert-tasks` in `server.js`. Passed through `normalizeTask()` as `appId` field in `App.jsx`.
 - Displays `-` when `ApplicationID` is null.
 
-**Column widths (task drill-through tables)** — adjusted 2026-06-25 to fit the extra App ID column:
-- Task ID: 90px · App ID: 100px · Create Dte: 100px · SLAAdjusted Dte: 120px · Description: flexible · Status: 90px · TAT vs Target: 180px · Priority: 80px
+**CURRENT column in drill-through tables:**
+- Column **Current** appears immediately after **Description** in all task drill-through tables.
+- Shows the task's current status name from `ConfigTaskStatus` (e.g., "In Progress", "On Hold", "On Queue", "Not Queued").
+- Data source: `ts.TaskStatus` joined via `LEFT JOIN ConfigTaskStatus ts ON t.TaskStatusID = ts.ConfigTaskStatusID`.
+  - `/api/tasks`: join already present; `ts.TaskStatus` already selected.
+  - `/api/alert-tasks`: join added to `staffJoin`; `ISNULL(ts.TaskStatus, '') AS TaskStatus` added to both UNION branches.
+- Passed through `normalizeTask()` as `taskStatus` field in `App.jsx`.
+- Displays `-` when null/empty.
+
+**No-wrap rule for task tables:**
+- All columns in task tables have `white-space: nowrap` **except Description**.
+- Description column may wrap freely — all other columns (Task ID, App ID, Create Dte, SLAAdjusted Dte, Current, Status/Team, TAT vs Target, Priority) must not wrap.
+- Applied via `style={{whiteSpace:'nowrap'}}` on each `<td>` in `TaskRow`, `AlertsPanel` drill-through rows, and `TasksView` rows.
+
+**Column widths (task drill-through tables)** — adjusted 2026-06-26 to fit App ID + Current columns:
+- Task ID: 90px · App ID: 100px · Create Dte: 100px · SLAAdjusted Dte: 120px · Description: flexible · Current: 100px · Status: 90px · TAT vs Target: 180px · Priority: 80px
+
+**Column widths (TasksView — All Active Tasks page):**
+- Task ID: 90px · App ID: 100px · Create Dte: 100px · SLAAdjusted Dte: 120px · Description: flexible · Current: 110px · Team: 130px · Status: 90px · TAT vs Target: 180px · Priority: 80px
 
 ### Chart Rendering Rules (2026-06-15)
 

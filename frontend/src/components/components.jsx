@@ -277,7 +277,8 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                               <th style={{width: '100px'}}>App ID</th>
                               <th style={{width: '100px'}}>Create Dte</th>
                               <th style={{width: '120px'}}>SLAAdjusted Dte</th>
-                              <th>Description</th>
+                              <th style={{minWidth: '660px'}}>Description</th>
+                              <th style={{width: '100px'}}>Current</th>
                               <th style={{width: '90px'}}>Status</th>
                               <th style={{width: '180px'}}>TAT vs Target</th>
                               <th style={{width: '80px'}}>Priority</th>
@@ -297,20 +298,21 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                               const rowCls = status.cls === 'bad' ? 'overdue-row' : 'risk-row';
                               return (
                                 <tr key={t.TaskID + '-' + t.taskType} className={rowCls}>
-                                  <td><span className="task-id">{t.TaskID}</span></td>
-                                  <td><span className="task-id">{t.ApplicationID != null ? t.ApplicationID : '-'}</span></td>
-                                  <td><span className="soft">{t.CreateDte || '-'}</span></td>
-                                  <td><span className="soft">{t.SLAAdjustedDte || '-'}</span></td>
+                                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TaskID}</span></td>
+                                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.ApplicationID != null ? t.ApplicationID : '-'}</span></td>
+                                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.CreateDte || '-'}</span></td>
+                                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.SLAAdjustedDte || '-'}</span></td>
                                   <td>
                                     <div className="task-desc-main">{desc}</div>
                                     <div className="task-client">{t.ShortDescription || '-'}</div>
                                   </td>
-                                  <td>
+                                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.TaskStatus || '-'}</span></td>
+                                  <td style={{whiteSpace:'nowrap'}}>
                                     <span className={`pill ${status.cls}`}>
                                       <span className="pill-dot"/>{status.label}
                                     </span>
                                   </td>
-                                  <td>
+                                  <td style={{whiteSpace:'nowrap'}}>
                                     <div className="tat-cell">
                                       <div className="t">
                                         <span className="mono">{tat.toFixed(1)}h</span>
@@ -321,7 +323,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                                       </div>
                                     </div>
                                   </td>
-                                  <td>
+                                  <td style={{whiteSpace:'nowrap'}}>
                                     <span className={`priority ${prio}`}>
                                       <span className="dot"/>{prioLabel}
                                     </span>
@@ -390,20 +392,21 @@ const TaskRow = ({ task, target }) => {
 
   return (
     <tr className={rowCls}>
-      <td><span className="task-id">{task.id}</span></td>
-      <td><span className="task-id">{task.appId != null ? task.appId : '-'}</span></td>
-      <td><span className="soft">{task.createDte || '-'}</span></td>
-      <td><span className="soft">{task.slaAdjustedDte || '-'}</span></td>
+      <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.id}</span></td>
+      <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.appId != null ? task.appId : '-'}</span></td>
+      <td style={{whiteSpace:'nowrap'}}><span className="soft">{task.createDte || '-'}</span></td>
+      <td style={{whiteSpace:'nowrap'}}><span className="soft">{task.slaAdjustedDte || '-'}</span></td>
       <td>
         <div className="task-desc-main">{task.desc}</div>
         <div className="task-client">{task.client}</div>
       </td>
-      <td>
+      <td style={{whiteSpace:'nowrap'}}><span className="soft">{task.taskStatus || '-'}</span></td>
+      <td style={{whiteSpace:'nowrap'}}>
         <span className={`pill ${task.status}`}>
           <span className="pill-dot"/>{statusLabel}
         </span>
       </td>
-      <td>
+      <td style={{whiteSpace:'nowrap'}}>
         <div className="tat-cell">
           <div className="t">
             <span className="mono">{task.tatHours.toFixed(1)}h</span>
@@ -414,7 +417,7 @@ const TaskRow = ({ task, target }) => {
           </div>
         </div>
       </td>
-      <td>
+      <td style={{whiteSpace:'nowrap'}}>
         <span className={`priority ${task.priority === 'high' ? 'high' : task.priority === 'med' ? 'med' : 'low'}`}>
           <span className="dot"/>{prioLabel}
         </span>
@@ -439,7 +442,7 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10 }) => {
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" style={{width: 'min(1600px, 96vw)'}}>
         <div className="modal-head">
           <div className="modal-head-top">
             <div className="modal-title">
@@ -477,7 +480,8 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10 }) => {
                 <th style={{width: '100px'}}>App ID</th>
                 <th style={{width: '100px'}}>Create Dte</th>
                 <th style={{width: '120px'}}>SLAAdjusted Dte</th>
-                <th>Description</th>
+                <th style={{minWidth: '660px'}}>Description</th>
+                <th style={{width: '100px'}}>Current</th>
                 <th style={{width: '90px'}}>Status</th>
                 <th style={{width: '180px'}}>TAT vs Target</th>
                 <th style={{width: '80px'}}>Priority</th>
