@@ -381,8 +381,11 @@ GROUP BY CASE <TEAM_ID_CASE> END
 | `/api/staff/absent-today` | GET | `[{ staffId, fullName, departmentName, workStatusName, startedTime, endedTime }]` — all staff absent today (`ConfigWorkStatus.IsAbsent = 1`) where `WorkStatusHistory.StartedTime` is in today range (`>= today` and `< next day`). | StaffListView “Absent Today” table |
 | `/api/staff/department/:id` | GET | `[{ staffId, fullName, employeeStatus, isGroup }]` — active staff (EmployeeStatus=1, non-null name) in one department, ordered by name. | StaffListView drill-through modal |
 | `/api/admin/users` | GET | `[{ id, email, companyName, role, status, createdAt }]` — status: `approved`. **Admin JWT required.** | AdminView user list |
+| `/api/admin/users/:id` | DELETE | `{ message }` — removes user from `DashboardAccess` and `ConfigReportUsers`. **Admin JWT required.** | AdminView Remove button |
 | `/api/auth/forgot-password` | POST | `{ token, expiresIn }` — generates a 1-hour reset token stored in DB, returns it directly (no email infra). 404 if email not found/not approved. | Login "Lost password" flow |
 | `/api/auth/reset-password` | POST | `{ message }` — validates token, checks expiry, updates `PasswordHash`, clears token. 400 on invalid/expired token. | Login "Set new password" form |
+
+> **Signup note (2026-06-26):** `/api/auth/signup` no longer requires `companyName`. Only `email` and `password` are required. User identity is tied to a matching active `Staff` record by email address.
 
 ---
 

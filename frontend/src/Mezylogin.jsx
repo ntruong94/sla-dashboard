@@ -143,7 +143,7 @@ export default function Mezylogin({ onLogin }) {
         const data = await authLogin(email.trim(), password);
         onLogin(data.token, { email: data.email, companyName: data.companyName, role: data.role });
       } else {
-        await authSignup(email.trim(), password, companyName.trim());
+        await authSignup(email.trim(), password);
         setInfo('Signup successful! Your account is pending admin approval.');
         switchMode('login');
       }

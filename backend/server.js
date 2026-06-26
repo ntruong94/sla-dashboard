@@ -1342,9 +1342,9 @@ app.post('/api/auth/reset-password', authLimiter, express.json(), async (req, re
 
 // POST /api/auth/signup
 app.post('/api/auth/signup', authLimiter, express.json(), async (req, res) => {
-  const { email, password, companyName } = req.body || {};
-  if (!email || !password || !companyName)
-    return res.status(400).json({ error: 'Email, password and company name are required.' });
+  const { email, password } = req.body || {};
+  if (!email || !password)
+    return res.status(400).json({ error: 'Email and password are required.' });
   if (password.length < 6)
     return res.status(400).json({ error: 'Password must be at least 6 characters.' });
   try {
@@ -1463,6 +1463,25 @@ app.get('/api/admin/users', requireAdmin, async (req, res) => {
       status:      u.IsActive == null ? 'pending' : (u.IsActive ? 'approved' : 'rejected'),
       createdAt:   u.CreatedAt,
     })));
+  } catch (err) {
+    sendError(res, 500, 'Internal server error', err);
+  }
+});
+
+// DELETE /api/admin/users/:id — remove a user entirely (admin only)
+app.delete('/api/admin/users/:id', requireAdmin, async (req, res) => {
+  const userId = parseInt(req.params.id, 10);
+  if (!userId || isNaN(userId))
+    return res.status(400).json({ error: 'Invalid user ID.' });
+  try {
+    const pool = await connectDB();
+    await pool.request()
+      .input('userId', sql.Int, userId)
+      .query(`DELETE FROM DashboardAccess WHERE UserId = @userId`);
+    await pool.request()
+      .input('userId', sql.Int, userId)
+      .query(`DELETE FROM ConfigReportUsers WHERE UserId = @userId`);
+    res.json({ message: 'User removed.' });
   } catch (err) {
     sendError(res, 500, 'Internal server error', err);
   }

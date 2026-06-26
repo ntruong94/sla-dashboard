@@ -5,7 +5,7 @@ import { AlertsPanel, InfoTip } from './components.jsx';
 import { fmtHMS } from './utils.js';
 import { TEAM_COLORS, slaClass, slaLabel, TOOLTIPS } from '../constants.js';
 import { activeTeams } from '../chartUtils.js';
-import { getAdminUsers, getStaffDepartments, getStaffAbsentToday, getStaffByDepartment } from '../api.js';
+import { getAdminUsers, deleteAdminUser, getStaffDepartments, getStaffAbsentToday, getStaffByDepartment } from '../api.js';
 
 // Additional views for sidebar nav routing
 
@@ -931,6 +931,7 @@ function AdminView() {
   const [users, setUsers]     = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError]     = React.useState('');
+  const [removing, setRemoving] = React.useState(null); // userId being removed
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -941,6 +942,14 @@ function AdminView() {
   }, []);
 
   React.useEffect(() => { load(); }, [load]);
+
+  const handleRemove = (u) => {
+    if (!window.confirm(`Remove ${u.email} from the user list?`)) return;
+    setRemoving(u.id);
+    deleteAdminUser(u.id)
+      .then(() => { setRemoving(null); load(); })
+      .catch(err => { setRemoving(null); alert(err.message); });
+  };
 
   const STATUS_STYLE = {
     pending:  { background: 'color-mix(in srgb, var(--warn) 18%, transparent)', color: 'var(--warn)',  fontWeight: 600 },
@@ -994,6 +1003,7 @@ function AdminView() {
                   <th>Role</th>
                   <th>Joined</th>
                   <th style={{ textAlign: 'center' }}>Status</th>
+                  <th style={{ textAlign: 'center' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -1006,6 +1016,15 @@ function AdminView() {
                       <span style={{ ...STATUS_STYLE[u.status], padding: '2px 10px', borderRadius: 10, fontSize: 12, textTransform: 'capitalize' }}>
                         {u.status}
                       </span>
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <button
+                        onClick={() => handleRemove(u)}
+                        disabled={removing === u.id}
+                        style={{ background: 'none', border: '1px solid var(--bad)', color: 'var(--bad)', borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: removing === u.id ? 'not-allowed' : 'pointer', opacity: removing === u.id ? 0.5 : 1 }}
+                      >
+                        {removing === u.id ? '…' : 'Remove'}
+                      </button>
                     </td>
                   </tr>
                 ))}

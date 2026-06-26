@@ -52,11 +52,11 @@ export async function authResetPassword(token, password) {
   return data; // { message }
 }
 
-export async function authSignup(email, password, companyName) {
+export async function authSignup(email, password) {
   const res = await fetch(`${BASE}/api/auth/signup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...EXTRA_HEADERS },
-    body: JSON.stringify({ email, password, companyName }),
+    body: JSON.stringify({ email, password }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Signup failed');
@@ -103,7 +103,8 @@ async function postAction(path) {
   return res.json();
 }
 
-export const getAdminUsers = () => request('/api/admin/users');
+export const getAdminUsers    = ()   => request('/api/admin/users');
+export const deleteAdminUser  = (id) => request(`/api/admin/users/${id}`, { method: 'DELETE' });
 
 export const getStaffDepartments  = ()       => request('/api/staff/departments');
 export const getStaffAbsentToday  = ()       => request('/api/staff/absent-today');
