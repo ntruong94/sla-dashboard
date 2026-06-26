@@ -1057,9 +1057,12 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
 
   // atRiskFraction: clamped to [0.50, 0.99] to prevent nonsensical values
   const atRiskFraction = Math.min(0.99, Math.max(0.50, parseFloat(req.query.atRiskPct || 87.5) / 100));
-  // customTarget: optional override for this team's SLA hours (from Settings)
+  // customTarget: optional override for this team's SLA hours (from Settings).
+  // Falls back to the team's default target (e.g. 4h), NOT t.SLAInHours (per-task DB field
+  // that varies by task type and can be 0.5h), so status and TAT bar match All Active Tasks.
   const customTargetH = parseFloat(req.query.customTarget);
-  const slaExpr = (customTargetH > 0) ? customTargetH.toString() : 't.SLAInHours';
+  const teamDefaultTarget = teamDef.target || 4;
+  const slaExpr = (customTargetH > 0) ? customTargetH.toString() : teamDefaultTarget.toString();
 
   if (USE_MOCK) {
     const tasks = mock.TASKS
