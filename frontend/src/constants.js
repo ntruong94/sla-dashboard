@@ -1,17 +1,46 @@
 ﻿// Shared constants used across all dashboard components.
 // TEAM_COLORS is keyed by team name as returned by the backend /api/teams and /api/tasks endpoints.
-// Colours match the CSS variables --t1 … --t8 defined in styles.css.
+// Colours match the CSS variables --t1 … --t9 defined in styles.css.
+// For dynamic teams (SpecifiedKPIGrp values not in the 9 known teams), a cycling
+// fallback palette is used so new team cards always get a distinct colour.
 
-export const TEAM_COLORS = {
+const _TEAM_COLORS_BASE = {
   'Data Entry':        'var(--t1)',
   'Valuations':        'var(--t2)',
   'Assessments':       'var(--t3)',
   'Packaging & QA':    'var(--t4)',
   'CLA':               'var(--t5)',
   'Funder Submission': 'var(--t6)',
-  'Settlement':        'var(--t7)',
-  'Ezy Client Care':   'var(--t8)',
+  'Funder MIR':        'var(--t7)',
+  'Settlement':        'var(--t8)',
+  'Ezy Client Care':   'var(--t9)',
 };
+
+// Palette for auto-discovered dynamic KPI groups (names not in _TEAM_COLORS_BASE).
+const _DYNAMIC_PALETTE = [
+  '#1F7A8C', // teal
+  '#B5446E', // rose
+  '#556B2F', // olive
+  '#8B4513', // saddle brown
+  '#4169E1', // royal blue
+  '#8B008B', // dark magenta
+];
+const _dynamicColorCache = {};
+
+// TEAM_COLORS behaves like a plain object for all 9 known teams.
+// For any unknown team name (dynamic groups), returns a colour from _DYNAMIC_PALETTE
+// assigned deterministically by order of first lookup.
+export const TEAM_COLORS = new Proxy(_TEAM_COLORS_BASE, {
+  get(target, name) {
+    if (typeof name !== 'string') return target[name];
+    if (name in target) return target[name];
+    if (!(name in _dynamicColorCache)) {
+      const idx = Object.keys(_dynamicColorCache).length % _DYNAMIC_PALETTE.length;
+      _dynamicColorCache[name] = _DYNAMIC_PALETTE[idx];
+    }
+    return _dynamicColorCache[name];
+  },
+});
 
 export const slaClass = (pct) => pct >= 90 ? 'ok' : pct >= 75 ? 'warn' : 'bad';
 export const slaLabel = (pct) => pct >= 90 ? 'On Target' : pct >= 75 ? 'At Risk' : 'Breach';

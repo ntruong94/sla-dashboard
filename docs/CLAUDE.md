@@ -95,7 +95,7 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 
 > **Date scope (SLA % only):** `DateCompleted >= 'YYYY-MM-DD' AND DateCompleted < 'next-day'` — uses `DateCompleted`, not `DateCreated`. See SLA% Rule below.
 > **Delta scope:** today value − prev biz day value. Same per-metric date columns and status filters.
-> **Team scope filter (all metrics):** `s.DepartmentId IN (101, 128, 10, 122, 86, 82) AND s.EmployeeStatus = 1` — `TEAM_FILTER` constant. All queries use `LEFT JOIN Staff s ON t.AssignedTo = s.StaffID`.
+> **Team scope filter (all metrics):** `(ct.UsedForKPI = 1 AND ct.SpecifiedKPIGrp non-empty) OR (ct.UsedForKPI IS NULL AND ct.SpecifiedKPIGrp IS NULL AND s.DepartmentId IN (101, 110, 122) AND s.EmployeeStatus = 1)` — `TEAM_FILTER` constant. Rule 1 branch: KPI-flagged tasks with a non-empty `SpecifiedKPIGrp`. Rule 2 branch: fully-unclassified tasks assigned to a fallback-dept team's active staff (ids 1, 2, 4). All queries use `LEFT JOIN Staff s ON t.AssignedTo = s.StaffID` and `LEFT JOIN ConfigTasks ct ON t.ConfigTaskId = ct.ConfigTaskId`.
 
 > **SLA% Rule (2026-06-17 — updated):** All SLA% figures (Overall KPI, per-team cards, history chart) use `DateCompleted` for date scoping and count a completed task as compliant when **either** condition is true:
 > 1. `DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0 <= targetExpr`
@@ -119,37 +119,60 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 
 ## 6. Dashboard Teams
 
-The dashboard maps **8 logical teams**. Teams 1–4, 7, 8 use `Staff.DepartmentId`. Teams 5–6 (CLA, Funder Submission) use `ConfigLoanStatus.Name` via `REPORT_Loans_Extension` join.
+The dashboard maps **8 defined teams** identified via `ConfigTasks.UsedForKPI = 1` and `ConfigTasks.SpecifiedKPIGrp` LIKE patterns, plus optional **dynamic teams** auto-discovered from the database.
 
-| id | Dashboard Name | Department | SLA Target | Filter |
-|----|---------------|------------|------------|--------|
-| 1 | Data Entry | Origination | 4 hours | `Staff.DepartmentId = 101` |
-| 2 | Valuations | Origination | 4 hours | `Staff.DepartmentId = 110` |
-| 3 | Assessments | Credit | 4 hours | `Staff.DepartmentId = 86` |
-| 4 | Packaging & QA | Credit | 4 hours | `Staff.DepartmentId = 122` |
-| 5 | CLA | Credit | 4 hours | `cls.Name LIKE '%CLA%'` |  (all task names have this keyword)
-| 6 | Funder Submission | Credit | 4 hours | `cls.Name LIKE '%funder approval to be obtained%' OR cls.Name LIKE '%house%'` | (all task names have this keyword)
-| 7 | Settlement | Settlement | 4 hours | `Staff.DepartmentId = 12` |
-| 8 | Ezy Client Care | Client Care | 4 hours | `Staff.DepartmentId = 10` |
+| id | Dashboard Name | Department | SLA Target | kpiGrp pattern | Fallback Department |
+|----|---------------|------------|------------|----------------|---------------------|
+| 1 | Data Entry | Origination | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Data%Entry%'` | `fallbackDeptId=101` |
+| 2 | Valuations | Origination | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Valuation%'` | `fallbackDeptId=110` |
+| 3 | Assessments | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Assessment%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 4 | Packaging & QA | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Packaging%' OR ct.SpecifiedKPIGrp LIKE N'%QA%'` | `fallbackDeptId=122` |
+| 5 | CLA | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%CLA%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 6 | Funder Submission | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Funder%Submission%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 7 | Funder MIR | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Funder%MIR%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 8 | Settlement | Settlement | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Settlement%'` | *no fallback — KPI-tagged tasks exist in DB* |
 
-> **UPDATED 2026-06-16** — Restructured from 6 teams to 8 teams.
-> Teams 5 & 6 are identified by the application's current loan status (`ConfigLoanStatus.Name`) via `REPORT_Loans_Extension` join, **not** by `Staff.DepartmentId`.
-> All dept-based teams still require `s.EmployeeStatus = 1`.
+> **UPDATED 2026-06-25** — Refactored from 8 teams (DepartmentId/REPORT_Loans_Extension) to 9 teams using `ConfigTasks.UsedForKPI`/`SpecifiedKPIGrp`.
+> **UPDATED 2026-06-30** — Two-tier classification: kpiGrp-primary WHENs now fire **first** (explicit SpecifiedKPIGrp match wins); DeptId-primary WHENs are the fallback for unclassified tasks.
+> **UPDATED 2026-07-01** — Fallback `DepartmentId` set only for teams that need it (Data Entry → 101, Valuations → 110, Packaging & QA → 122). Data Entry keeps a dept 101 fallback so that dept-101 tasks with `UsedForKPI IS NULL AND SpecifiedKPIGrp IS NULL/empty` still surface as Data Entry work; any dept-101 task tagged with a different `SpecifiedKPIGrp` (e.g. `BP Help Desk`) is routed by Rule 1 instead. Assessments, CLA, Funder Submission, Funder MIR, Settlement intentionally have **no** dept fallback — counts stay to explicitly-tagged tasks only. Ezy Client Care card removed. Valuations kpiGrp broadened to `LIKE N'%Valuation%'` (Pre‑ exclusion removed). Fallback (Rule 2) requires `ct.UsedForKPI IS NULL` **and** `ct.SpecifiedKPIGrp IS NULL/empty`.
 
-**Backend implementation:** `TEAMS` constant in `backend/server.js` defines the mapping.
-- Teams 1–4, 7, 8 use `departmentId` field — filtered via `LEFT JOIN Staff ON t.AssignedTo = s.StaffID WHERE s.DepartmentId = N AND s.EmployeeStatus = 1`
-- Teams 5–6 use `type: 'loan_status'` and `clsFilter` field — joined via:
-  ```sql
-  LEFT JOIN REPORT_Loans_Extension rle ON t.ApplicationID = rle.ApplicationID
-  LEFT JOIN ConfigLoanStatus cls ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId
-  ```
-  and filtered by `cls.Name LIKE N'%...'` pattern
-- `TEAM_FILTER` constant: `(s.DepartmentId IN (101,110,86,122,12,10) AND s.EmployeeStatus = 1) OR <cls filters>`
-- `LOAN_STATUS_JOIN` constant: the two LEFT JOINs above — injected into all aggregate queries after the Staff join
-- `TEAM_ID_CASE` SQL CASE: **CRITICAL PRECEDENCE RULE (2026-06-17)** — loan_status teams (5–6) MUST be checked FIRST in the CASE expression, THEN dept teams (1–4, 7–8). When a task's assigned staff matches a DepartmentId AND the task's loan status matches a ConfigLoanStatus, the loan_status filter takes precedence. Example: Task assigned to Charles (DepartmentId=86 Assessments) but with Funder Submission loan status → tagged as team 6, not team 3. In `backend/server.js`, use `TEAMS.filter(t => !t.departmentId)` first (loan_status), then `TEAMS.filter(t => t.departmentId)` (dept), and concatenate their SQL expressions in that order.
-- The `?team=<id>` query param on `/api/tasks` accepts team id 1–8; dept teams add `s.DepartmentId = N AND s.EmployeeStatus = 1`; loan_status teams add the `clsFilter` expression
-- `TEAM_COLORS` in `constants.js`: keyed by team name string → `var(--t1)` … `var(--t8)`
-- CSS vars in `styles.css`: `--t1:#0F9ED5` `--t2:#4EA72E` `--t3:#E97132` `--t4:#0E2841` `--t5:#7E350E` `--t6:#F6508F` `--t7:#C00000` `--t8:#808080` (steel-blue, green, orange, dark-navy, dark-brown, pink, dark-red, grey); `.team-grid` uses `repeat(4, 1fr)` (4 columns)
+> **GROUPING PRIORITY (source of truth — updated 2026-07-01):** Every team / group calculation across the dashboard (team cards, All Teams, SLA / Volume / TAT / Overdue metrics, charts, legends, drill-throughs, popups, tables, filters, aggregates) follows this exact two-step rule:
+>
+> 1. **Rule 1 — KPI group (PRIORITY):** If a task has `ct.UsedForKPI = 1` **AND** `ct.SpecifiedKPIGrp` is non-null and non-empty (after `LTRIM`/`RTRIM`), it is grouped by `SpecifiedKPIGrp` (static team pattern match, or auto-discovered dynamic team). Card / table / drill-through labels use `SpecifiedKPIGrp`.
+> 2. **Rule 2 — Department FALLBACK:** Only tasks where **`ct.UsedForKPI IS NULL` AND `ct.SpecifiedKPIGrp IS NULL/empty`** fall back to `s.DepartmentId`. Fallback requires `s.EmployeeStatus = 1`.
+>
+> Rule 1 and Rule 2 are mutually exclusive by construction, so a task is **never counted twice**. Any task that satisfies neither rule (e.g. `UsedForKPI=1` with a non-matching kpiGrp, or `UsedForKPI IS NULL` with a non-null kpiGrp) is **excluded entirely** — it does not pollute dept fallback counts.
+>
+> **Automatic recalculation:** All calculations reflect the current state of `ConfigTasks` on the next cache refresh (5-min TTL) — no code or config change is required. When a task moves from `(UsedForKPI IS NULL + kpiGrp IS NULL)` into `(UsedForKPI=1 + kpiGrp populated)`, it stops being counted under its dept fallback team and starts being counted under its `SpecifiedKPIGrp` team; the reverse is also automatic.
+>
+> SQL CASE precedence enforces this naturally — Rule 1 WHENs are listed first (all 8 static teams + any dynamic teams), Rule 2 WHENs are listed second (only for teams with a `fallbackDeptId`). A task always matches **at most one** WHEN.
+
+**Dynamic teams (auto-discovery):**
+- **Whenever a `ConfigTasks` row has `UsedForKPI = 1` and a non-null, non-empty `SpecifiedKPIGrp` value that does not match any of the 8 defined team patterns, the dashboard automatically surfaces that group as a new team card with full KPI data — no code changes or config edits required.**
+- Discovery runs at backend startup and on every 5-minute teams cache refresh (`refreshDynamicGroups()` called at the start of `fetchTeamsData()`).
+- Group names are normalized via `LTRIM`/`RTRIM` in SQL and `.trim()` in JS before use, so leading/trailing whitespace differences in the DB do not create duplicate cards.
+- IDs start at 100, sorted alphabetically for stability (e.g., first new group = id 100, second = 101).
+- Card name = trimmed `SpecifiedKPIGrp` value from the database.
+- Dynamic team cards appear **after "Settlement"** (after id=8) in all views.
+- KPI calculations (volume, SLA %, avg TAT, overdue, deltas, history, alerts) follow the same logic as static teams — scoped to `LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'<name>'`.
+- Default SLA target = 4 hours; users can override via Settings after the card appears.
+
+**Backend implementation:** `TEAMS` array and helper functions in `backend/server.js`.
+- `TEAMS` (static array, 8 entries): each team has `{ id, name, dept, target, kpiGrp, fallbackDeptId }`.
+- `_dynamicTeams` (runtime array): populated by `refreshDynamicGroups()`, same shape as TEAMS entries plus `isDynamic: true`.
+- `getAllTeams()`: returns `[...TEAMS, ..._dynamicTeams]` — used in all SQL building and result mapping.
+- `getTeamIdCase()`: builds SQL CASE for team id (all static + dynamic teams).
+- `getTeamNameCase()`: builds SQL CASE for team name (all static + dynamic teams).
+- **Team classification — two-tier system (2026-06-30, refined 2026-07-01):** Teams are split into two types based on whether `fallbackDeptId` is set in the `TEAMS` array:
+  - **Has fallback** (ids 1, 2, 4 — `fallbackDeptId` set): Rule 1 (`UsedForKPI=1 AND <kpiGrp>`) fires first; Rule 2 (`UsedForKPI IS NULL AND kpiGrp IS NULL/empty AND DepartmentId=<N> AND EmployeeStatus=1`) fires second as a fallback. Current DeptIds: Data Entry=101, Valuations=110, Packaging & QA=122.
+  - **No fallback / kpiGrp-only** (ids 3, 5, 6, 7, 8 — no `fallbackDeptId`): Only `UsedForKPI=1` tasks whose `SpecifiedKPIGrp` matches the kpiGrp pattern are counted. `Staff.DepartmentId` is never used for classification.
+  - **Dynamic teams** (ids 100+): Always kpiGrp-only — exact `SpecifiedKPIGrp` match only, no fallback.
+- **`getTeamIdCase()` / `getTeamNameCase()` WHEN order (updated 2026-06-30 — grouping priority):** Rule 1 (kpiGrp pattern) WHENs fire **first** for both kpiPrimary and deptPrimary teams: `WHEN ct.UsedForKPI = 1 AND <kpiGrp pattern> THEN <id>`. Rule 2 (DeptId fallback) WHENs fire **second** and apply only when `SpecifiedKPIGrp` is NULL/empty: `WHEN (ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'') AND s.DepartmentId = <N> AND s.EmployeeStatus = 1 THEN <id>`. Rule 2 does **not** require `ct.UsedForKPI = 1` — it captures tasks where both `UsedForKPI` and `SpecifiedKPIGrp` are NULL (typical of unclassified/legacy tasks). The two rules together never double-count because the WHEN conditions are mutually exclusive (Rule 1 requires non-empty kpiGrp, Rule 2 requires NULL/empty kpiGrp).
+- `TEAM_FILTER` constant: `((ct.UsedForKPI = 1) OR ((ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'') AND s.DepartmentId IN (<fallbackDeptIds>) AND s.EmployeeStatus = 1))` — admits Rule 1 tasks via the first branch and Rule 2 fallback candidates via the second branch. The `<fallbackDeptIds>` list is built dynamically from `TEAMS.filter(t => t.fallbackDeptId)`. Tasks with non-NULL `SpecifiedKPIGrp` that don't match any Rule 1 pattern are filtered out entirely — they are not assigned to any team.
+- `CONFIG_TASKS_JOIN` constant: `LEFT JOIN ConfigTasks ct WITH (NOLOCK) ON t.ConfigTaskId = ct.ConfigTaskId` — injected into all aggregate queries.
+- The `?team=<id>` query param on `/api/tasks` and `/api/alert-tasks/:teamId` accepts team id 1–8 (static) or 100+ (dynamic); all routed through `getAllTeams().find(...)`.
+- `TEAM_COLORS` in `constants.js`: Proxy object — 8 known names return `var(--t1)…var(--t8)`; unknown names (dynamic teams) return colors from `_DYNAMIC_PALETTE` (`#1F7A8C`, `#B5446E`, `#556B2F`, `#8B4513`, `#4169E1`, `#8B008B`), assigned by order of first lookup.
+- CSS vars in `styles.css`: `--t1:#0F9ED5` `--t2:#4EA72E` `--t3:#E97132` `--t4:#0E2841` `--t5:#7E350E` `--t6:#F6508F` `--t7:#7030A0` `--t8:#C00000` (`--t9` retained but unused after Ezy Client Care removal).
 - **Exact team order and hex colors (authoritative):**
   | # | Team Name | Hex Color |
   |---|-----------|-----------|
@@ -159,8 +182,8 @@ The dashboard maps **8 logical teams**. Teams 1–4, 7, 8 use `Staff.DepartmentI
   | 4 | Packaging & QA | `#0E2841` |
   | 5 | CLA | `#7E350E` |
   | 6 | Funder Submission | `#F6508F` |
-  | 7 | Settlement | `#C00000` |
-  | 8 | Ezy Client Care | `#808080` |
+  | 7 | Funder MIR | `#7030A0` |
+  | 8 | Settlement | `#C00000` |
 - Chart lines `strokeWidth="2.5"`; dots `r=4` (hover `r=6`) in both `trend.jsx` and `history-chart.jsx`
 
 ---
@@ -755,21 +778,55 @@ SLA Dashboard/
 - Frontend: port **5173** (`http://localhost:5173`)
 - To clear port 5000 if occupied: `Get-Process -Name node | Stop-Process -Force`
 
-### Settings Persistence Rule (2026-06-08, updated 2026-06-09)
+### Settings Persistence Rule (2026-06-08, updated 2026-06-30)
 
 > **INVARIANT: User-configured settings MUST persist across logout/login, page refresh, backend restart, and reopening the site. Settings must NEVER silently revert to defaults.**
 
-- Settings are persisted to `localStorage` key `sla_dash_settings`.
+> **PER-USER ISOLATION (2026-06-30): All settings — including team order (`groupOrder`), SLA targets, at-risk threshold, and loan targets — are stored independently per authenticated user. Changing settings as User A has no effect on User B's settings. Each user always sees their own previously saved configuration.**
+
+- Settings are persisted to `localStorage` key **`sla_dash_settings_<email>`** (one key per authenticated user email). Falls back to `sla_dash_settings` if no email is available.
+- **Helper functions** in `App.jsx`: `settingsKey(email)` returns the per-user key; `loadSettings(email)` reads and merges settings from that key.
 - **Two write paths** (belt-and-suspenders):
-  1. `applySettings()` calls `localStorage.setItem(...)` immediately on Apply.
-  2. A `useEffect([settings])` in `App.jsx` always syncs settings to localStorage whenever the state changes — this is the safety net that ensures settings are never lost even if a single write path fails.
-- **Read path:** `useState` lazy initializer in `App.jsx` reads from `localStorage` on every page load/mount. Merges with `DEFAULT_SETTINGS` so new keys added in future releases have sensible defaults without overwriting saved values.
+  1. `applySettings()` calls `localStorage.setItem(settingsKey(email), ...)` immediately on Apply.
+  2. A `useEffect([settings])` in `App.jsx` always syncs settings to the current user's key whenever the state changes — this is the safety net that ensures settings are never lost even if a single write path fails.
+- **Read path:** `useState` lazy initializer in `App.jsx` calls `loadSettings(getStoredUser().email)` on every page load/mount. Merges with `DEFAULT_SETTINGS` so new keys added in future releases have sensible defaults without overwriting saved values.
+- **Login path:** `handleLogin()` calls `loadSettings(user.email)` and immediately applies the new user's settings via `setSettings()` + `settingsRef.current`. This ensures a user who logs in after another always sees their own settings — not the previous user's.
 - **Initial data load MUST use saved targets:** `useEffect([authed])` reads `settingsRef.current.targets` and passes them to `getKpiSummary`, `getTeams`, `getAlerts`, and `getHistory`. This ensures the dashboard data reflects user-configured SLA targets from the very first render, not hardcoded defaults.
-- `handleLogout()` must **never** remove `sla_dash_settings` — only `sla_token` and `sla_user` are cleared on logout.
-- `handleLogin()` must **never** call `setSettings()` — in-memory settings survive logout/login without a page refresh; on page refresh, the `useState` lazy initializer re-reads from `localStorage`.
-- `resetSettings()` explicitly removes `sla_dash_settings` and resets `settingsRef.current` to `DEFAULT_SETTINGS` before calling `setSettings(DEFAULT_SETTINGS)`. The safety-net `useEffect([settings])` then saves defaults back. This only runs when the user explicitly clicks "Reset defaults".
-- **`SettingsView` draft must not depend on `teams` for initialization** — `makeDraft(s)` uses `targets: { ...s.targets }` (sparse dict, not a teams loop). The render already falls back to `t.target` via `draft.targets[t.id] ?? t.target`. This prevents the bug where draft targets become `{}` when teams haven't loaded yet (e.g., immediately after re-login while still on the Settings tab).
+- `handleLogout()` must **never** remove any settings key — only `sla_token` and `sla_user` are cleared on logout.
+- `resetSettings()` explicitly removes the current user's settings key (`settingsKey(email)`) and resets `settingsRef.current` to `DEFAULT_SETTINGS` before calling `setSettings(DEFAULT_SETTINGS)`. The safety-net `useEffect([settings])` then saves defaults back under that user's key. This only runs when the user explicitly clicks "Reset defaults".
+- **`SettingsView` draft must not depend on `teams` for initialization** — `makeDraft(s)` uses `targets: { ...s.targets }` and `teamOrder: Array.isArray(s.groupOrder) ? [...s.groupOrder] : []` (sparse dict and array copy, no teams loop). The render falls back to `t.target` via `draft.targets[t.id] ?? t.target`, and `orderedDraftTeams` falls back to the natural `teams` array when `draft.teamOrder` is empty. This prevents the bug where draft values become `{}` or `[]` when teams haven't loaded yet.
 - The `useEffect` in `SettingsView` that re-syncs `draft` depends only on `[settings]` — this is correct. Adding `teams` to the deps would reset in-progress edits on auto-refresh.
+
+### Team Order (Drag-and-Drop) — Feature Reference (Added 2026-07-01)
+
+Controls the display order of team cards, tables, charts, and legends across all views via drag-and-drop in the Settings tab.
+
+**Settings key:** `settings.groupOrder` — array of team IDs in display order, e.g. `[1, 2, 3, 4, 5, 6, 7, 8, 9]`. Stored in `localStorage` under the per-user key `sla_dash_settings_<email>` — **isolated per user account**. Changing the order as one user never affects another user's saved order.
+
+**Default:** `[]` (empty array). When empty, `teamsDisplay` uses the natural backend order (Data Entry → Valuations → Assessments → Packaging & QA → CLA → Funder Submission → Funder MIR → Settlement, then any dynamic groups in alphabetical order).
+
+**`DEFAULT_SETTINGS`:** `groupOrder: []`.
+
+**`makeDraft(s)` in `SettingsView`:** `teamOrder: Array.isArray(s.groupOrder) ? [...s.groupOrder] : []` — does not depend on the `teams` prop at initialization (safe when teams haven't loaded yet).
+
+**Sorting applied in `teamsDisplay` useMemo (`App.jsx`):**
+```javascript
+const order = settings.groupOrder;
+if (!order || order.length === 0) return display;        // natural order
+const orderMap = new Map(order.map((id, idx) => [id, idx]));
+return [...display].sort((a, b) =>
+  (orderMap.get(a.id) ?? Infinity) - (orderMap.get(b.id) ?? Infinity)
+);
+```
+Teams not in `orderMap` (new dynamic groups) get `Infinity` and sort after all ordered teams in their original backend order (stable sort).
+
+**Where ordering applies:** `teamsDisplay` is the single derived array used by all views — dashboard team cards, 7-Day Trend chart legend, TeamsView table, TasksView team filter, ReportsView history chart and legend. SettingsView receives raw `teams` (unordered) for the `orderedDraftTeams` memo.
+
+**UI section (Settings tab):** Section renamed from "SLA Targets per Team" to **"Team order and SLA target"**. Each row has `draggable` set and a 6-dot grip handle SVG on the far left. Drag a row to a new position; the outline highlights the drop target. Dropping updates `draft.teamOrder` (array of all team IDs in new order). Clicking **Apply Changes** saves `groupOrder: draft.teamOrder` into `settings`, which triggers `teamsDisplay` to recompute and immediately propagates the new order across all open tabs/views — no page reload needed.
+
+**New dynamic teams (ids 100+):** Appended after all ordered teams when first discovered (not in `groupOrder`). After dragging them into position and applying, they join the saved `groupOrder` array.
+
+**Persistence:** Saved via the standard `applySettings()` → `localStorage.setItem('sla_dash_settings', ...)` flow. The safety-net `useEffect([settings])` in `App.jsx` also writes it. Survives logout/login, page refresh, and backend restart. `resetSettings()` clears `groupOrder` back to `[]` (natural order).
 
 ---
 

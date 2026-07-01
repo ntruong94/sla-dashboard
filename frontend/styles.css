@@ -36,8 +36,9 @@
   --t4: #0E2841;   /* Packaging & QA    — dark navy     */
   --t5: #7E350E;   /* CLA               — dark brown    */
   --t6: #F6508F;   /* Funder Submission — pink          */
-  --t7: #C00000;   /* Settlement        — dark red      */
-  --t8: #808080;   /* Ezy Client Care   — grey          */
+  --t7: #7030A0;   /* Funder MIR        — purple        */
+  --t8: #C00000;   /* Settlement        — dark red      */
+  --t9: #808080;   /* Ezy Client Care   — grey          */
 
   /* Card / panel surface */
   --card-bg: rgba(255, 255, 255, 0.18);

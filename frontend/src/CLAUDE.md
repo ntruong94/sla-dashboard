@@ -95,7 +95,7 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 
 > **Date scope (SLA % only):** `DateCompleted >= 'YYYY-MM-DD' AND DateCompleted < 'next-day'` — uses `DateCompleted`, not `DateCreated`. See SLA% Rule below.
 > **Delta scope:** today value − prev biz day value. Same per-metric date columns and status filters.
-> **Team scope filter (all metrics):** `s.DepartmentId IN (101, 128, 10, 122, 86, 82) AND s.EmployeeStatus = 1` — `TEAM_FILTER` constant. All queries use `LEFT JOIN Staff s ON t.AssignedTo = s.StaffID`.
+> **Team scope filter (all metrics):** `(ct.UsedForKPI = 1 AND ct.SpecifiedKPIGrp non-empty) OR (ct.UsedForKPI IS NULL AND ct.SpecifiedKPIGrp IS NULL AND s.DepartmentId IN (110, 122, 10) AND s.EmployeeStatus = 1)` — `TEAM_FILTER` constant. Rule 1 branch: KPI-flagged tasks with a non-empty `SpecifiedKPIGrp`. Rule 2 branch: fully-unclassified tasks assigned to a fallback-dept team's active staff (ids 2, 4, 9). All queries use `LEFT JOIN Staff s ON t.AssignedTo = s.StaffID` and `LEFT JOIN ConfigTasks ct ON t.ConfigTaskId = ct.ConfigTaskId`.
 
 > **SLA% Rule (2026-06-17 — updated):** All SLA% figures (Overall KPI, per-team cards, history chart) use `DateCompleted` for date scoping and count a completed task as compliant when **either** condition is true:
 > 1. `DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0 <= targetExpr`
@@ -119,37 +119,47 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 
 ## 6. Dashboard Teams
 
-The dashboard maps **8 logical teams**. Teams 1–4, 7, 8 use `Staff.DepartmentId`. Teams 5–6 (CLA, Funder Submission) use `ConfigLoanStatus.Name` via `REPORT_Loans_Extension` join.
+The dashboard maps **9 defined teams** identified via `ConfigTasks.UsedForKPI = 1` and `ConfigTasks.SpecifiedKPIGrp` LIKE patterns, plus optional **dynamic teams** auto-discovered from the database.
 
-| id | Dashboard Name | Department | SLA Target | Filter |
-|----|---------------|------------|------------|--------|
-| 1 | Data Entry | Origination | 4 hours | `Staff.DepartmentId = 101` |
-| 2 | Valuations | Origination | 4 hours | `Staff.DepartmentId = 110` |
-| 3 | Assessments | Credit | 4 hours | `Staff.DepartmentId = 86` |
-| 4 | Packaging & QA | Credit | 4 hours | `Staff.DepartmentId = 122` |
-| 5 | CLA | Credit | 4 hours | `cls.Name LIKE '%CLA%'` |  (all task names have this keyword)
-| 6 | Funder Submission | Credit | 4 hours | `cls.Name LIKE '%funder approval to be obtained%' OR cls.Name LIKE '%house%'` | (all task names have this keyword)
-| 7 | Settlement | Settlement | 4 hours | `Staff.DepartmentId = 12` |
-| 8 | Ezy Client Care | Client Care | 4 hours | `Staff.DepartmentId = 10` |
+| id | Dashboard Name | Department | SLA Target | kpiGrp pattern | Fallback Department |
+|----|---------------|------------|------------|----------------|---------------------|
+| 1 | Data Entry | Origination | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Data%Entry%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 2 | Valuations | Origination | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Valuation%'` | `fallbackDeptId=110` |
+| 3 | Assessments | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Assessment%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 4 | Packaging & QA | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Packaging%' OR ct.SpecifiedKPIGrp LIKE N'%QA%'` | `fallbackDeptId=122` |
+| 5 | CLA | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%CLA%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 6 | Funder Submission | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Funder%Submission%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 7 | Funder MIR | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Funder%MIR%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 8 | Settlement | Settlement | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Settlement%'` | *no fallback — KPI-tagged tasks exist in DB* |
+| 9 | Ezy Client Care | Client Care | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Client%Care%'` | `fallbackDeptId=10` |
 
-> **UPDATED 2026-06-16** — Restructured from 6 teams to 8 teams.
-> Teams 5 & 6 are identified by the application's current loan status (`ConfigLoanStatus.Name`) via `REPORT_Loans_Extension` join, **not** by `Staff.DepartmentId`.
-> All dept-based teams still require `s.EmployeeStatus = 1`.
+> **UPDATED 2026-06-25** — Refactored from 8 teams (DepartmentId/REPORT_Loans_Extension) to 9 teams using `ConfigTasks.UsedForKPI`/`SpecifiedKPIGrp`.
+> **UPDATED 2026-06-30** — Two-tier classification: kpiGrp-primary WHENs now fire **first** (explicit SpecifiedKPIGrp match wins); DeptId-primary WHENs are the fallback for unclassified tasks.
+> **UPDATED 2026-07-01** — Fallback `DepartmentId` added only for teams with **no** `UsedForKPI=1` records in the DB (Valuations → 110, Packaging & QA → 122, Ezy Client Care → 10). Teams that already have KPI-tagged records (Data Entry, Assessments, CLA, Funder Submission, Funder MIR, Settlement) intentionally have **no** dept fallback — counts stay to the explicitly-tagged tasks only. Data Entry moved to Rule 1-only after users set up new task codes with `UsedForKPI=1 AND SpecifiedKPIGrp='Data Entry'`. Valuations kpiGrp broadened to `LIKE N'%Valuation%'` (Pre‑ exclusion removed). Fallback (Rule 2) tightened to require `ct.UsedForKPI IS NULL` **and** `ct.SpecifiedKPIGrp IS NULL/empty`.
 
-**Backend implementation:** `TEAMS` constant in `backend/server.js` defines the mapping.
-- Teams 1–4, 7, 8 use `departmentId` field — filtered via `LEFT JOIN Staff ON t.AssignedTo = s.StaffID WHERE s.DepartmentId = N AND s.EmployeeStatus = 1`
-- Teams 5–6 use `type: 'loan_status'` and `clsFilter` field — joined via:
-  ```sql
-  LEFT JOIN REPORT_Loans_Extension rle ON t.ApplicationID = rle.ApplicationID
-  LEFT JOIN ConfigLoanStatus cls ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId
-  ```
-  and filtered by `cls.Name LIKE N'%...'` pattern
-- `TEAM_FILTER` constant: `(s.DepartmentId IN (101,110,86,122,12,10) AND s.EmployeeStatus = 1) OR <cls filters>`
-- `LOAN_STATUS_JOIN` constant: the two LEFT JOINs above — injected into all aggregate queries after the Staff join
-- `TEAM_ID_CASE` SQL CASE: **CRITICAL PRECEDENCE RULE (2026-06-17)** — loan_status teams (5–6) MUST be checked FIRST in the CASE expression, THEN dept teams (1–4, 7–8). When a task's assigned staff matches a DepartmentId AND the task's loan status matches a ConfigLoanStatus, the loan_status filter takes precedence. Example: Task assigned to Charles (DepartmentId=86 Assessments) but with Funder Submission loan status → tagged as team 6, not team 3. In `backend/server.js`, use `TEAMS.filter(t => !t.departmentId)` first (loan_status), then `TEAMS.filter(t => t.departmentId)` (dept), and concatenate their SQL expressions in that order.
-- The `?team=<id>` query param on `/api/tasks` accepts team id 1–8; dept teams add `s.DepartmentId = N AND s.EmployeeStatus = 1`; loan_status teams add the `clsFilter` expression
-- `TEAM_COLORS` in `constants.js`: keyed by team name string → `var(--t1)` … `var(--t8)`
-- CSS vars in `styles.css`: `--t1:#0F9ED5` `--t2:#4EA72E` `--t3:#E97132` `--t4:#0E2841` `--t5:#7E350E` `--t6:#F6508F` `--t7:#C00000` `--t8:#808080` (steel-blue, green, orange, dark-navy, dark-brown, pink, dark-red, grey); `.team-grid` uses `repeat(4, 1fr)` (4 columns)
+> **GROUPING PRIORITY (source of truth — updated 2026-07-01):** Every team / group calculation across the dashboard (team cards, All Teams, SLA / Volume / TAT / Overdue metrics, charts, legends, drill-throughs, popups, tables, filters, aggregates) follows this exact two-step rule:
+>
+> 1. **Rule 1 — KPI group (PRIORITY):** If a task has `ct.UsedForKPI = 1` **AND** `ct.SpecifiedKPIGrp` is non-null and non-empty (after `LTRIM`/`RTRIM`), it is grouped by `SpecifiedKPIGrp` (static team pattern match, or auto-discovered dynamic team). Card / table / drill-through labels use `SpecifiedKPIGrp`.
+> 2. **Rule 2 — Department FALLBACK:** Only tasks where **`ct.UsedForKPI IS NULL` AND `ct.SpecifiedKPIGrp IS NULL/empty`** fall back to `s.DepartmentId`. Fallback requires `s.EmployeeStatus = 1`.
+>
+> Rule 1 and Rule 2 are mutually exclusive by construction, so a task is **never counted twice**. Any task that satisfies neither rule is **excluded entirely**.
+>
+> **Automatic recalculation:** All calculations reflect the current state of `ConfigTasks` on the next cache refresh (5-min TTL) — no code or config change is required. When a task moves from `(UsedForKPI IS NULL + kpiGrp IS NULL)` into `(UsedForKPI=1 + kpiGrp populated)`, it stops being counted under its dept fallback team and starts being counted under its `SpecifiedKPIGrp` team; the reverse is also automatic.
+
+**Dynamic teams (auto-discovery):**
+- **Whenever a `ConfigTasks` row has `UsedForKPI = 1` and a non-null, non-empty `SpecifiedKPIGrp` value that does not match any of the 9 defined team patterns, the dashboard automatically surfaces that group as a new team card with full KPI data — no code changes or config edits required.**
+- Discovery runs at backend startup and on every 5-minute teams cache refresh (`refreshDynamicGroups()` called at the start of `fetchTeamsData()`).
+- Group names are normalized via `LTRIM`/`RTRIM` in SQL and `.trim()` in JS before use, so leading/trailing whitespace differences in the DB do not create duplicate cards.
+- IDs start at 100, sorted alphabetically for stability (e.g., first new group = id 100, second = 101).
+- Card name = trimmed `SpecifiedKPIGrp` value from the database.
+- Dynamic team cards appear **after "Ezy Client Care"** (after id=9) in all views.
+- KPI calculations (volume, SLA %, avg TAT, overdue, deltas, history, alerts) follow the same logic as static teams — scoped to `LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'<name>'`.
+- Default SLA target = 4 hours; users can set a custom target in Settings.
+
+**Frontend implementation:**
+- `TEAM_COLORS` in `constants.js`: Proxy object — 9 known names return `var(--t1)…var(--t9)`; unknown names (dynamic groups) return colors from `_DYNAMIC_PALETTE` cycling from `#1F7A8C` (teal) onward.
+- `TEAM_COLORS[name]` works as usual for all existing code — the Proxy handles fallback transparently.
+- CSS vars in `styles.css`: `--t1:#0F9ED5` `--t2:#4EA72E` `--t3:#E97132` `--t4:#0E2841` `--t5:#7E350E` `--t6:#F6508F` `--t7:#7030A0` `--t8:#C00000` `--t9:#808080`
 - **Exact team order and hex colors (authoritative):**
   | # | Team Name | Hex Color |
   |---|-----------|-----------|
@@ -159,8 +169,9 @@ The dashboard maps **8 logical teams**. Teams 1–4, 7, 8 use `Staff.DepartmentI
   | 4 | Packaging & QA | `#0E2841` |
   | 5 | CLA | `#7E350E` |
   | 6 | Funder Submission | `#F6508F` |
-  | 7 | Settlement | `#C00000` |
-  | 8 | Ezy Client Care | `#808080` |
+  | 7 | Funder MIR | `#7030A0` |
+  | 8 | Settlement | `#C00000` |
+  | 9 | Ezy Client Care | `#808080` |
 - Chart lines `strokeWidth="2.5"`; dots `r=4` (hover `r=6`) in both `trend.jsx` and `history-chart.jsx`
 
 ---

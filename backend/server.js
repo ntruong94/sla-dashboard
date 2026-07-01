@@ -32,27 +32,20 @@ function sendError(res, status, publicMessage, err) {
 }
 
 // --- Team definitions ---------------------------------------------------------
-// 8 teams mapped to either Staff.DepartmentId (dept-based) or a loan status
-// pattern via REPORT_Loans_Extension -> ConfigLoanStatus (loan_status-based).
-// Only dept-based teams require s.EmployeeStatus = 1.
+// 9 teams. Primary identification: ConfigTasks.UsedForKPI = 1 AND SpecifiedKPIGrp LIKE '...'
+// Fallback (dept-based teams only): Staff.DepartmentId = N AND Staff.EmployeeStatus = 1
+// Teams 5 (CLA), 6 (Funder Submission), 7 (Funder MIR) have no dept fallback — count 0 if no KPI match.
 const TEAMS = [
-  { id: 1, name: 'Data Entry',        dept: 'Origination',  target: 4, departmentId: 101 },
-  { id: 2, name: 'Valuations',        dept: 'Origination',  target: 4, departmentId: 110 },
-  { id: 3, name: 'Assessments',       dept: 'Credit',       target: 4, departmentId: 86  },
-  { id: 4, name: 'Packaging & QA',    dept: 'Credit',       target: 4, departmentId: 122 },
-  // Teams 5 & 6 identified by the application's current ConfigLoanStatus.Name
-  // via: LEFT JOIN REPORT_Loans_Extension rle ON t.ApplicationID = rle.ApplicationID
-  //       LEFT JOIN ConfigLoanStatus cls ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId
-  { id: 5, name: 'CLA',               dept: 'Credit',       target: 4, departmentId: null,
-    type: 'loan_status',
-    clsFilter: "cls.Name LIKE N'%CLA%'" },
-  { id: 6, name: 'Funder Submission', dept: 'Credit',       target: 4, departmentId: null,
-    type: 'loan_status',
-    clsFilter: "(cls.Name LIKE N'%funder approval to be obtained%' OR cls.Name LIKE N'%house%')" },
-  { id: 7, name: 'Settlement',        dept: 'Settlement',   target: 4, departmentId: 82  },
-  { id: 8, name: 'Ezy Client Care',   dept: 'Client Care',  target: 4, departmentId: 10  },
+  { id: 1, name: 'Data Entry',        dept: 'Origination',  target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Data%Entry%'",                                              fallbackDeptId: 101  },
+  { id: 2, name: 'Valuations',        dept: 'Origination',  target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Valuation%'",                                                fallbackDeptId: 110  },
+  { id: 3, name: 'Assessments',       dept: 'Credit',       target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Assessment%'",                                              fallbackDeptId: null },
+  { id: 4, name: 'Packaging & QA',    dept: 'Credit',       target: 4, kpiGrp: "(ct.SpecifiedKPIGrp LIKE N'%Packaging%' OR ct.SpecifiedKPIGrp LIKE N'%QA%')",          fallbackDeptId: 122  },
+  { id: 5, name: 'CLA',               dept: 'Credit',       target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%CLA%'",                                                     fallbackDeptId: null },
+  { id: 6, name: 'Funder Submission', dept: 'Credit',       target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Funder%Submission%'",                                       fallbackDeptId: null },
+  { id: 7, name: 'Funder MIR',        dept: 'Credit',       target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Funder%MIR%'",                                              fallbackDeptId: null },
+  { id: 8, name: 'Settlement',        dept: 'Settlement',   target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Settlement%'",                                              fallbackDeptId: null },
 ];
-const DEPT_TEAM_IDS = TEAMS.filter(t => t.departmentId).map(t => t.departmentId); // [101,110,86,122,12,10]
+const FALLBACK_DEPT_IDS = TEAMS.filter(t => t.fallbackDeptId).map(t => t.fallbackDeptId);
 
 // --- Effective reporting date -----------------------------------------------
 // The dashboard operates against a reporting DB refreshed nightly from the live
@@ -126,39 +119,124 @@ function computeDates() {
   return { today, prev, todayNext: nextDay(today), prevNext: nextDay(prev) };
 }
 
-// Build SQL CASE expressions mapping tasks -> team id / name (1-8).
-// CRITICAL: loan_status teams (5 & 6) MUST have HIGHER precedence than dept-based teams (1-4, 7-8).
-// If a task's AssignedTo has DepartmentId 86 (Assessments) but the task also matches Funder Submission
-// ConfigLoanStatus.Name, it MUST report as team 6, NOT team 3. So we check cls filters FIRST.
-// Requires: LEFT JOIN Staff s ON t.AssignedTo = s.StaffID
-//           LEFT JOIN REPORT_Loans_Extension rle ON t.ApplicationID = rle.ApplicationID
-//           LEFT JOIN ConfigLoanStatus cls ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId
-const loanStatusTeams = TEAMS.filter(t => !t.departmentId);  // teams 5, 6
-const deptTeams       = TEAMS.filter(t => t.departmentId);   // teams 1-4, 7-8
-const TEAM_ID_CASE = [
-  ...loanStatusTeams.map(t => `WHEN ${t.clsFilter} THEN ${t.id}`),
-  ...deptTeams.map(t => `WHEN s.DepartmentId = ${t.departmentId} THEN ${t.id}`)
-].join(' ');
-const TEAM_NAME_CASE = [
-  ...loanStatusTeams.map(t => `WHEN ${t.clsFilter} THEN '${t.name}'`),
-  ...deptTeams.map(t => `WHEN s.DepartmentId = ${t.departmentId} THEN '${t.name}'`)
-].join(' ');
-// WHERE predicate: dept-based teams by Staff.DepartmentId; loan_status teams by cls.Name.
-const LOAN_STATUS_TEAMS = TEAMS.filter(t => t.type === 'loan_status');
-const TEAM_FILTER = `(
-  (s.DepartmentId IN (${DEPT_TEAM_IDS.join(',')}) AND s.EmployeeStatus = 1)
-  OR ${LOAN_STATUS_TEAMS.map(t => t.clsFilter).join(' OR ')}
-)`;
-// SQL JOINs required for loan_status teams (safe to include in all queries as LEFT JOINs).
-const LOAN_STATUS_JOIN = `
-      LEFT JOIN REPORT_Loans_Extension rle WITH (NOLOCK) ON t.ApplicationID = rle.ApplicationID
-      LEFT JOIN ConfigLoanStatus       cls WITH (NOLOCK) ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId`;
+// Grouping priority (source of truth — see CLAUDE.md Section 6):
+//   Rule 1 (PRIORITY): Tasks with ct.UsedForKPI = 1 AND non-empty ct.SpecifiedKPIGrp
+//           are grouped by SpecifiedKPIGrp (static team patterns + dynamic teams).
+//   Rule 2 (FALLBACK): Tasks with ct.UsedForKPI IS NULL AND ct.SpecifiedKPIGrp IS NULL/empty
+//           fall back to s.DepartmentId, requiring s.EmployeeStatus = 1.
+// Rule 1 and Rule 2 are mutually exclusive by design (no double counting).
+// Tasks that satisfy neither rule (e.g. UsedForKPI=1 with kpiGrp not matching any team,
+// or UsedForKPI IS NULL with a non-null kpiGrp) are excluded entirely.
+const _FALLBACK_DEPT_IDS = TEAMS.filter(t => t.fallbackDeptId).map(t => t.fallbackDeptId).join(', ');
+const _NULL_KPIGRP    = `(ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'')`;
+const _NONEMPTY_KPIGRP = `(ct.SpecifiedKPIGrp IS NOT NULL AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) <> N'')`;
+const _RULE1_MATCH = `(ct.UsedForKPI = 1 AND ${_NONEMPTY_KPIGRP})`;
+const _RULE2_MATCH = `(ct.UsedForKPI IS NULL AND ${_NULL_KPIGRP})`;
+const TEAM_FILTER = `(${_RULE1_MATCH} OR (${_RULE2_MATCH} AND s.DepartmentId IN (${_FALLBACK_DEPT_IDS}) AND s.EmployeeStatus = 1))`;
+// SQL JOIN required to access ConfigTasks.UsedForKPI and ConfigTasks.SpecifiedKPIGrp.
+const CONFIG_TASKS_JOIN = `
+      LEFT JOIN ConfigTasks ct WITH (NOLOCK) ON t.ConfigTaskId = ct.ConfigTaskId`;
+
+// --- Dynamic KPI groups -------------------------------------------------------
+// If users add new SpecifiedKPIGrp values to ConfigTasks (UsedForKPI=1) that are
+// not matched by any of the 9 defined team kpiGrp patterns, those groups are
+// auto-discovered, assigned sequential IDs from 100, and rendered as additional
+// team cards after "Ezy Client Care". Sorted alphabetically for stable ordering.
+let _dynamicTeams = [];
+
+// Build SQL NOT conditions to exclude all 9 known team patterns from discovery query.
+function buildKnownGroupsExclusion() {
+  return TEAMS.map(t => `NOT (${t.kpiGrp})`).join('\n        AND ');
+}
+
+// Query DB for additional SpecifiedKPIGrp values not belonging to any of the 9 teams.
+async function refreshDynamicGroups() {
+  try {
+    const pool = await connectDB();
+    const excl = buildKnownGroupsExclusion();
+    const res = await pool.request().query(`
+      SELECT DISTINCT LTRIM(RTRIM(ct.SpecifiedKPIGrp)) AS SpecifiedKPIGrp
+      FROM ConfigTasks ct WITH (NOLOCK)
+      WHERE ct.UsedForKPI = 1
+        AND ct.SpecifiedKPIGrp IS NOT NULL
+        AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) <> N''
+        AND ${excl}
+      ORDER BY LTRIM(RTRIM(ct.SpecifiedKPIGrp))
+    `);
+    const groups = res.recordset || [];
+    const newTeams = groups.map((r, i) => {
+      const name = r.SpecifiedKPIGrp.trim(); // JS-side safety trim
+      return {
+        id:            100 + i,
+        name,
+        dept:          'Other',
+        target:        4,
+        kpiGrp:        `LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'${name.replace(/'/g, "''")}'`,
+        fallbackDeptId: null,
+        isDynamic:     true,
+      };
+    });
+
+    // Detect changes — only log and invalidate cache when the team list actually changed
+    const oldSig = _dynamicTeams.map(t => t.name).join('|');
+    const newSig  = newTeams.map(t => t.name).join('|');
+    const changed = oldSig !== newSig;
+    _dynamicTeams = newTeams;
+
+    if (changed) {
+      const label = _dynamicTeams.length > 0
+        ? `${_dynamicTeams.length} additional KPI group(s): ${_dynamicTeams.map(t => t.name).join(', ')}`
+        : 'no dynamic KPI groups';
+      console.log(`[dynamic teams] change detected — ${label}`);
+      // Invalidate teams cache so the very next /api/teams request fetches fresh data
+      _cache.teams.data = null;
+      _cache.teams.ts   = 0;
+    }
+  } catch (err) {
+    console.error('[dynamic teams] refresh failed:', err.message);
+    // Keep previous _dynamicTeams on error — do not reset
+  }
+}
+
+// Returns all 9 static teams + any dynamic teams discovered from the DB.
+function getAllTeams() { return [...TEAMS, ..._dynamicTeams]; }
+
+// Build SQL CASE for team id — includes dynamic teams discovered at runtime.
+// Usage: CASE ${getTeamIdCase()} END AS teamId
+function getTeamIdCase() {
+  const all = getAllTeams();
+  const deptPrimary = all.filter(t => t.fallbackDeptId);  // has dept fallback
+  const kpiOnly     = all.filter(t => !t.fallbackDeptId); // no dept fallback
+  return [
+    // Rule 1 (PRIORITY): UsedForKPI=1 AND non-empty SpecifiedKPIGrp matching team pattern (incl. dynamic teams)
+    ...kpiOnly.map(t     => `WHEN ${_RULE1_MATCH} AND ${t.kpiGrp} THEN ${t.id}`),
+    ...deptPrimary.map(t => `WHEN ${_RULE1_MATCH} AND ${t.kpiGrp} THEN ${t.id}`),
+    // Rule 2 (FALLBACK): UsedForKPI IS NULL AND SpecifiedKPIGrp IS NULL/empty, routed by active staff DeptId
+    ...deptPrimary.map(t => `WHEN ${_RULE2_MATCH} AND s.DepartmentId = ${t.fallbackDeptId} AND s.EmployeeStatus = 1 THEN ${t.id}`)
+  ].join(' ');
+}
+
+// Build SQL CASE for team name — includes dynamic teams.
+// Usage: CASE ${getTeamNameCase()} END AS QueueName
+function getTeamNameCase() {
+  const all = getAllTeams();
+  const deptPrimary = all.filter(t => t.fallbackDeptId);
+  const kpiOnly     = all.filter(t => !t.fallbackDeptId);
+  return [
+    // Rule 1 (PRIORITY): UsedForKPI=1 AND non-empty SpecifiedKPIGrp matching team pattern (incl. dynamic teams)
+    ...kpiOnly.map(t     => `WHEN ${_RULE1_MATCH} AND ${t.kpiGrp} THEN N'${t.name.replace(/'/g, "''")}'`),
+    ...deptPrimary.map(t => `WHEN ${_RULE1_MATCH} AND ${t.kpiGrp} THEN N'${t.name.replace(/'/g, "''")}'`),
+    // Rule 2 (FALLBACK): UsedForKPI IS NULL AND SpecifiedKPIGrp IS NULL/empty, routed by active staff DeptId
+    ...deptPrimary.map(t => `WHEN ${_RULE2_MATCH} AND s.DepartmentId = ${t.fallbackDeptId} AND s.EmployeeStatus = 1 THEN N'${t.name.replace(/'/g, "''")}'`)
+  ].join(' ');
+}
 
 // --- Custom-target helpers ----------------------------------------------------
 // Parse ?t1=2&t2=4&t3=4&t4=4&t5=4&t6=4 into { 1: 2.0, 2: 4.0, ... }
+// Includes dynamic team IDs (100+) so custom targets work for dynamic groups too.
 function parseTargets(query) {
   const out = {};
-  TEAMS.forEach(team => {
+  getAllTeams().forEach(team => {
     const val = parseFloat(query[`t${team.id}`]);
     if (val > 0) out[team.id] = val;
   });
@@ -169,13 +247,18 @@ function parseTargets(query) {
 // teams that don't have a custom target configured.
 function buildTargetExpr(customTargets) {
   if (!customTargets || Object.keys(customTargets).length === 0) return 't.SLAInHours';
-  const cases = TEAMS.map(team => {
+  const all = getAllTeams();
+  const primaryCases = all.map(team => {
     const h = customTargets[team.id];
     if (!h) return null;
-    return team.departmentId
-      ? `WHEN s.DepartmentId = ${team.departmentId} THEN ${h}`
-      : `WHEN ${team.clsFilter} THEN ${h}`;
+    return `WHEN ${_RULE1_MATCH} AND ${team.kpiGrp} THEN ${h}`;
   }).filter(Boolean);
+  const fallbackCases = all.filter(t => t.fallbackDeptId).map(team => {
+    const h = customTargets[team.id];
+    if (!h) return null;
+    return `WHEN ${_RULE2_MATCH} AND s.DepartmentId = ${team.fallbackDeptId} AND s.EmployeeStatus = 1 THEN ${h}`;
+  }).filter(Boolean);
+  const cases = [...primaryCases, ...fallbackCases]; // Rule 1 (kpiGrp) first, Rule 2 (DeptId) fallback
   if (cases.length === 0) return 't.SLAInHours';
   return `CASE ${cases.join(' ')} ELSE t.SLAInHours END`;
 }
@@ -211,10 +294,14 @@ function getCached(key, fetchFn) {
   const c = _cache[key];
   const stale = !c.data || (Date.now() - c.ts >= CACHE_TTL_MS);
   if (stale && !c.pending) {
-    c.pending = fetchFn()
-      .then(data => { c.data = data; c.ts = Date.now(); })
-      .catch(err  => { console.error(`[cache ${key} refresh failed]`, err.message); })
+    const hadData = !!c.data;
+    const p = fetchFn()
+      .then(data => { c.data = data; c.ts = Date.now(); return data; })
+      .catch(err  => { console.error(`[cache ${key} refresh failed]`, err.message); throw err; })
       .finally(()  => { c.pending = null; });
+    c.pending = p;
+    // Background SWR refresh has no awaiter — swallow to prevent unhandled rejection killing the process.
+    if (hadData) p.catch(() => {});
   }
   if (c.data)    return Promise.resolve(c.data); // serve stale while refreshing
   if (c.pending) return c.pending;               // wait for first load
@@ -269,7 +356,7 @@ async function fetchKpiData(customTargets = {}) {
                       END ELSE NULL END)                                          AS prevTat
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      ${LOAN_STATUS_JOIN}
+      ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID IN (1, 2, 4, 5, 6)
         AND ${TEAM_FILTER}
         AND t.DateCreated >= '${prev}' AND t.DateCreated < '${todayNext}'
@@ -300,7 +387,7 @@ async function fetchKpiData(customTargets = {}) {
                             THEN 1 ELSE 0 END), 0) * 100                         AS prevSla
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      ${LOAN_STATUS_JOIN}
+      ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID = 2
         AND ${TEAM_FILTER}
         AND t.DateCompleted >= '${prev}' AND t.DateCompleted < '${todayNext}'
@@ -326,32 +413,24 @@ async function fetchKpiData(customTargets = {}) {
 }
 
 async function fetchTeamsData(customTargets = {}) {
+  // Refresh dynamic groups so new SpecifiedKPIGrp values are included in this cycle.
+  await refreshDynamicGroups();
   const NOW_SQL = getNowSql();
   const pool = await connectDB();
   const { today, prev, todayNext, prevNext } = computeDates();
   const targetExpr = buildTargetExpr(customTargets);
-  const claFilter = TEAMS.find(t => t.id === 5)?.clsFilter || '1=0';
-  const funderFilter = TEAMS.find(t => t.id === 6)?.clsFilter || '1=0';
-  const claTarget = customTargets[5] || TEAMS.find(t => t.id === 5)?.target || 4;
-  const funderTarget = customTargets[6] || TEAMS.find(t => t.id === 6)?.target || 4;
 
   // Three parallel queries:
-  // Q1: volume, avgTat, overdue � active/all tasks, DateCreated today.
-  //     TAT for open tasks = GETDATE()-DateCreated; closed = DateCompleted-DateCreated.
-  // Q2: volume/overdue/TAT deltas � DateCreated today + prev.
-  // Q3: SLA% per team � completed tasks (status=2), DateCompleted today + prev.
-  //     SLA compliance = DATEDIFF(DateCreated, DateCompleted) <= configured target.
-  //     targetExpr uses custom per-team target hours when configured, else t.SLAInHours.
-  // Q4: raw active metrics/day deltas for loan_status teams only (CLA/Funder),
-  //     independent from TEAM_ID_CASE precedence so these cards reflect clsFilter counts.
-  const [result, delta, slaResult, loanStatusRaw] = await Promise.all([
+  // Q1: volume, avgTat, overdue — active/all tasks, DateCreated today.
+  // Q2: volume/overdue/TAT deltas — DateCreated today + prev.
+  // Q3: SLA% per team — completed tasks (status=2), DateCompleted today + prev.
+  const [result, delta, slaResult] = await Promise.all([
     pool.request().query(`
       SELECT
-        CASE ${TEAM_ID_CASE} END AS teamId,
+        CASE ${getTeamIdCase()} END AS teamId,
         -- volume: active tasks only
         SUM(CASE WHEN t.TaskStatusID IN (1, 4, 5, 6) THEN 1 ELSE 0 END)           AS volume,
         -- avgTat: real-time elapsed hours per task
-        --         open tasks: GETDATE()-DateCreated; closed: DateCompleted-DateCreated
         AVG(CASE WHEN t.TaskStatusID IN (1,4,5,6)
                  THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0
                  ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0
@@ -363,16 +442,15 @@ async function fetchTeamsData(customTargets = {}) {
                  THEN 1 ELSE 0 END) AS overdue
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      ${LOAN_STATUS_JOIN}
+      ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID IN (1, 2, 4, 5, 6)
         AND ${TEAM_FILTER}
         AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
-      GROUP BY CASE ${TEAM_ID_CASE} END
+      GROUP BY CASE ${getTeamIdCase()} END
     `),
-    // Delta query: volume/overdue/TAT only � all date-scoped by DateCreated
     pool.request().query(`
       SELECT
-        CASE ${TEAM_ID_CASE} END AS teamId,
+        CASE ${getTeamIdCase()} END AS teamId,
         SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS todayVol,
         SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS prevVol,
         SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS todayOverdue,
@@ -381,19 +459,15 @@ async function fetchTeamsData(customTargets = {}) {
         AVG(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  THEN CASE WHEN t.TaskStatusID IN (1,4,5,6) THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 END ELSE NULL END) AS prevTat
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      ${LOAN_STATUS_JOIN}
+      ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID IN (1, 2, 4, 5, 6)
         AND ${TEAM_FILTER}
         AND t.DateCreated >= '${prev}' AND t.DateCreated < '${todayNext}'
-      GROUP BY CASE ${TEAM_ID_CASE} END
+      GROUP BY CASE ${getTeamIdCase()} END
     `),
-    // SLA% query: completed tasks only, date-scoped by DateCompleted.
-    // Compliance uses a combined OR rule (count once):
-    //   (closed-task TAT <= targetExpr) OR (DateCompleted <= SLAAdjustedDate when SLAAdjustedDate exists).
-    // targetExpr uses custom per-team target hours when configured, else t.SLAInHours.
     pool.request().query(`
       SELECT
-        CASE ${TEAM_ID_CASE} END AS teamId,
+        CASE ${getTeamIdCase()} END AS teamId,
         CAST(
           SUM(CASE WHEN t.DateCompleted >= '${today}' AND t.DateCompleted < '${todayNext}'
                    AND (
@@ -414,148 +488,37 @@ async function fetchTeamsData(customTargets = {}) {
                             THEN 1 ELSE 0 END), 0) * 100                         AS prevSla
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      ${LOAN_STATUS_JOIN}
+      ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID = 2
         AND ${TEAM_FILTER}
         AND t.DateCompleted >= '${prev}' AND t.DateCompleted < '${todayNext}'
-      GROUP BY CASE ${TEAM_ID_CASE} END
-    `),
-        pool.request().query(`
-      SELECT 5 AS teamId,
-             SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS todayVol,
-           SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS prevVol,
-           SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6)
-              AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${claTarget}
-                   OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
-              THEN 1 ELSE 0 END) AS todayOverdue,
-           SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6)
-              AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${claTarget}
-                   OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
-              THEN 1 ELSE 0 END) AS prevOverdue,
-           AVG(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
-              THEN CASE WHEN t.TaskStatusID IN (1,4,5,6)
-                  THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0
-                  ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 END
-              ELSE NULL END) AS todayTat,
-           AVG(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'
-              THEN CASE WHEN t.TaskStatusID IN (1,4,5,6)
-                  THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0
-                  ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 END
-                      ELSE NULL END) AS prevTat,
-             CAST(
-               SUM(CASE WHEN t.DateCompleted >= '${today}' AND t.DateCompleted < '${todayNext}'
-                        AND t.TaskStatusID = 2
-                        AND (
-                          DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${claTarget}
-                          OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
-                        )
-                        THEN 1 ELSE 0 END) AS FLOAT)
-               / NULLIF(SUM(CASE WHEN t.DateCompleted >= '${today}' AND t.DateCompleted < '${todayNext}'
-                                 AND t.TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS todaySla,
-             CAST(
-               SUM(CASE WHEN t.DateCompleted >= '${prev}' AND t.DateCompleted < '${prevNext}'
-                        AND t.TaskStatusID = 2
-                        AND (
-                          DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${claTarget}
-                          OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
-                        )
-                        THEN 1 ELSE 0 END) AS FLOAT)
-               / NULLIF(SUM(CASE WHEN t.DateCompleted >= '${prev}' AND t.DateCompleted < '${prevNext}'
-                                 AND t.TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS prevSla
-      FROM Tasks t WITH (NOLOCK)
-      ${LOAN_STATUS_JOIN}
-      WHERE ${claFilter}
-      UNION ALL
-      SELECT 6 AS teamId,
-             SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS todayVol,
-             SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS prevVol,
-             SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6)
-                      AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${funderTarget}
-                           OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
-                      THEN 1 ELSE 0 END) AS todayOverdue,
-             SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6)
-                      AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${funderTarget}
-                           OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
-                      THEN 1 ELSE 0 END) AS prevOverdue,
-             AVG(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
-                      THEN CASE WHEN t.TaskStatusID IN (1,4,5,6)
-                                THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0
-                                ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 END
-                      ELSE NULL END) AS todayTat,
-             AVG(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'
-                      THEN CASE WHEN t.TaskStatusID IN (1,4,5,6)
-                                THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0
-                                ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 END
-                      ELSE NULL END) AS prevTat,
-             CAST(
-               SUM(CASE WHEN t.DateCompleted >= '${today}' AND t.DateCompleted < '${todayNext}'
-                        AND t.TaskStatusID = 2
-                        AND (
-                          DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${funderTarget}
-                          OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
-                        )
-                        THEN 1 ELSE 0 END) AS FLOAT)
-               / NULLIF(SUM(CASE WHEN t.DateCompleted >= '${today}' AND t.DateCompleted < '${todayNext}'
-                                 AND t.TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS todaySla,
-             CAST(
-               SUM(CASE WHEN t.DateCompleted >= '${prev}' AND t.DateCompleted < '${prevNext}'
-                        AND t.TaskStatusID = 2
-                        AND (
-                          DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${funderTarget}
-                          OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
-                        )
-                        THEN 1 ELSE 0 END) AS FLOAT)
-               / NULLIF(SUM(CASE WHEN t.DateCompleted >= '${prev}' AND t.DateCompleted < '${prevNext}'
-                                 AND t.TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS prevSla
-      FROM Tasks t WITH (NOLOCK)
-      ${LOAN_STATUS_JOIN}
-      WHERE ${funderFilter}
+      GROUP BY CASE ${getTeamIdCase()} END
     `),
   ]);
 
   const round1 = v => Math.round((v || 0) * 10) / 10;
-  const rawByTeam = new Map((loanStatusRaw.recordset || []).map(r => [r.teamId, r]));
-  return TEAMS.map(team => {
+  return getAllTeams().map(team => {
     const row = result.recordset.find(r => r.teamId === team.id) || {};
     const d   = delta.recordset.find(r => r.teamId === team.id)  || {};
     const sla = slaResult.recordset.find(r => r.teamId === team.id) || {};
-    const raw = rawByTeam.get(team.id) || {};
-    const isLoanStatusTeam = team.id === 5 || team.id === 6;
-    const volume = isLoanStatusTeam ? (raw.todayVol || 0) : (row.volume || 0);
-    const avgTat = isLoanStatusTeam ? round1(raw.todayTat) : round1(row.avgTat);
-    const overdue = isLoanStatusTeam ? (raw.todayOverdue || 0) : (row.overdue || 0);
-    const volumeDelta = isLoanStatusTeam
-      ? ((raw.todayVol || 0) - (raw.prevVol || 0))
-      : ((d.todayVol || 0) - (d.prevVol || 0));
-    const avgTatDelta = isLoanStatusTeam
-      ? round1((raw.todayTat || 0) - (raw.prevTat || 0))
-      : round1((d.todayTat || 0) - (d.prevTat || 0));
-    const overdueDelta = isLoanStatusTeam
-      ? ((raw.todayOverdue || 0) - (raw.prevOverdue || 0))
-      : ((d.todayOverdue || 0) - (d.prevOverdue || 0));
-    const slaValue = isLoanStatusTeam ? Math.round(raw.todaySla || 0) : Math.round(sla.todaySla || 0);
-    const slaDelta = isLoanStatusTeam
-      ? parseFloat((((raw.todaySla || 0) - (raw.prevSla || 0)).toFixed(1)))
-      : parseFloat((((sla.todaySla || 0) - (sla.prevSla || 0))).toFixed(1));
     return {
       id:      team.id,
       name:    team.name,
       dept:    team.dept,
       target:  team.target,
-      volume,
-      sla:     slaValue,
-      avgTat,
-      overdue,
+      volume:  row.volume || 0,
+      sla:     Math.round(sla.todaySla || 0),
+      avgTat:  round1(row.avgTat),
+      overdue: row.overdue || 0,
       deltas: {
-        volume:  volumeDelta,
-        sla:     slaDelta,
-        avgTat:  avgTatDelta,
-        overdue: overdueDelta,
+        volume:  (d.todayVol     || 0) - (d.prevVol     || 0),
+        sla:     parseFloat(((sla.todaySla || 0) - (sla.prevSla || 0)).toFixed(1)),
+        avgTat:  round1((d.todayTat || 0) - (d.prevTat || 0)),
+        overdue: (d.todayOverdue || 0) - (d.prevOverdue || 0),
       },
     };
   });
 }
-
 const app = express();
 
 // Trust the first proxy hop (Vercel/Cloudflare/ngrok) so rate-limiter and
@@ -798,15 +761,14 @@ app.get('/api/tasks', async (req, res) => {
         t.Priority,
         t.TaskStatusID,
         ts.TaskStatus,
-        CASE ${TEAM_ID_CASE} END AS QueueId,
-        CASE ${TEAM_NAME_CASE} END AS QueueName,
+        CASE ${getTeamIdCase()} END AS QueueId,
+        CASE ${getTeamNameCase()} END AS QueueName,
         t.AssignedTo,
         s.FirstName    AS AssignedToName,
         RTRIM(ISNULL(s.FirstName,'') + ISNULL(' ' + s.Surname, '')) AS StaffFullName,
         ISNULL(s.IsGroup, 0) AS AssignedToIsGroup,
         RTRIM(ISNULL(cb.FirstName,'') + ISNULL(' ' + cb.Surname, '')) AS CreatedByFullName,
         ISNULL(cb.IsGroup, 0) AS CreatedByIsGroup,
-        ISNULL(cls.Name, '') AS ConfigLoanStatusName,
         -- RealtimeTAT: elapsed hours from creation to NOW_SQL (real-time for open tasks)
         DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 AS RealtimeTAT,
         CASE
@@ -818,22 +780,20 @@ app.get('/api/tasks', async (req, res) => {
       LEFT  JOIN ConfigTaskStatus ts WITH (NOLOCK) ON t.TaskStatusID = ts.ConfigTaskStatusID
       LEFT  JOIN Staff s             WITH (NOLOCK) ON t.AssignedTo   = s.StaffID
       LEFT  JOIN Staff cb            WITH (NOLOCK) ON t.CreatedBy    = cb.StaffID
-      ${LOAN_STATUS_JOIN}
+      ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID IN (1, 4, 5, 6)  -- In Progress, On Hold, On Queue, Not Queued
         AND ${TEAM_FILTER}
     `;
 
     if (team) {
-      // team param = TEAMS.id (1�6); expand to DepartmentId filter
-      const teamDef = TEAMS.find(t => t.id === parseInt(team));
+      // team param = team id (1-9 static, 100+ dynamic); filter by kpiGrp or fallback DeptId
+      const teamDef = getAllTeams().find(t => t.id === parseInt(team));
       if (teamDef) {
-        if (teamDef.departmentId) {
-          // dept-based team: filter by Staff.DepartmentId
-          query += ` AND s.DepartmentId = ${teamDef.departmentId} AND s.EmployeeStatus = 1`;
-        } else {
-          // loan_status-based team (CLA/Funder Submission): filter by ConfigLoanStatus.Name
-          query += ` AND ${teamDef.clsFilter}`;
-        }
+        const primary = `(ct.UsedForKPI = 1 AND ${teamDef.kpiGrp})`;
+        const fallback = teamDef.fallbackDeptId
+          ? ` OR (s.DepartmentId = ${teamDef.fallbackDeptId} AND s.EmployeeStatus = 1)`
+          : '';
+        query += ` AND (${primary}${fallback})`;
       }
     }
     if (status === 'ok') {
@@ -849,17 +809,7 @@ app.get('/api/tasks', async (req, res) => {
     query += ` ORDER BY DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 DESC`;
 
     const result = await request.query(query);
-    // For teams 5 & 6 (CLA & Funder Submission), append ConfigLoanStatusName to ShortDescription
-    const tasks = result.recordset.map(task => {
-      if ((task.QueueId === 5 || task.QueueId === 6) && task.ConfigLoanStatusName) {
-        return {
-          ...task,
-          ShortDescription: task.ShortDescription + ' / ' + task.ConfigLoanStatusName
-        };
-      }
-      return task;
-    });
-    res.json(tasks);
+    res.json(result.recordset);
   } catch (err) {
     sendError(res, 500, 'Internal server error', err);
   }
@@ -893,7 +843,7 @@ async function fetchHistoryData(range = '90d', customTargets = {}) {
   const result = await request.query(`
       SELECT
         CONVERT(varchar(10), t.DateCompleted, 120)                             AS Date,
-        CASE ${TEAM_ID_CASE} END                                               AS teamId,
+        CASE ${getTeamIdCase()} END                                               AS teamId,
         COUNT(*)                                                               AS total,
         SUM(CASE WHEN (
               DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${targetExpr}
@@ -901,20 +851,20 @@ async function fetchHistoryData(range = '90d', customTargets = {}) {
             ) THEN 1 ELSE 0 END) AS compliant
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      ${LOAN_STATUS_JOIN}
+      ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID = 2
         AND t.DateCompleted >= @startDate
         AND t.DateCompleted IS NOT NULL
         AND t.DateCreated IS NOT NULL
         AND t.SLAInHours > 0
         AND ${TEAM_FILTER}
-      GROUP BY CONVERT(varchar(10), t.DateCompleted, 120), CASE ${TEAM_ID_CASE} END
+      GROUP BY CONVERT(varchar(10), t.DateCompleted, 120), CASE ${getTeamIdCase()} END
     `);
   const aggRows = result.recordset;
   const dateSet = [...new Set(aggRows.map(r => r.Date))].sort();
   const byTeamMap = {};
   for (const row of aggRows) {
-    const team = TEAMS.find(t => t.id === row.teamId);
+    const team = getAllTeams().find(t => t.id === row.teamId);
     const name = team ? team.name : `Team ${row.teamId}`;
     if (!byTeamMap[name]) byTeamMap[name] = {};
     byTeamMap[name][row.Date] = Math.round((row.compliant / row.total) * 100);
@@ -1021,22 +971,22 @@ app.get('/api/alerts', async (req, res) => {
     const alertTargetExpr = buildTargetExpr(alertTargets);
     const result = await pool.request().query(`
       SELECT
-        CASE ${TEAM_ID_CASE} END                                                AS teamId,
+        CASE ${getTeamIdCase()} END                                                AS teamId,
         COUNT(*)                                                                AS total,
         SUM(CASE WHEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 <= ${alertTargetExpr}
                       AND (t.SLAAdjustedDate IS NULL OR ${NOW_SQL} <= t.SLAAdjustedDate) THEN 1 ELSE 0 END) AS compliant,
         SUM(CASE WHEN (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${alertTargetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS overdue
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      ${LOAN_STATUS_JOIN}
+      ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID IN (1, 4, 5, 6)
         AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
         AND ${TEAM_FILTER}
-      GROUP BY CASE ${TEAM_ID_CASE} END
+      GROUP BY CASE ${getTeamIdCase()} END
     `);
     // Attach team name from TEAMS definition before generating alerts
     const rows = result.recordset.map(r => {
-      const team = TEAMS.find(t => t.id === r.teamId) || {};
+      const team = getAllTeams().find(t => t.id === r.teamId) || {};
       return { ...r, QueueId: r.teamId, QueueName: team.name || `Team ${r.teamId}` };
     });
     res.json(buildAlerts(rows));
@@ -1050,7 +1000,7 @@ app.get('/api/alerts', async (req, res) => {
 // Query param: ?atRiskPct=87.5 (default 87.5 � matches frontend DEFAULT_SETTINGS)
 app.get('/api/alert-tasks/:teamId', async (req, res) => {
   const teamId  = parseInt(req.params.teamId, 10);
-  const teamDef = TEAMS.find(t => t.id === teamId);
+  const teamDef = getAllTeams().find(t => t.id === teamId);
   if (!teamDef) return res.status(404).json({ error: 'Team not found' });
   const NOW_SQL = getNowSql();
   const { today, todayNext } = computeDates();
@@ -1089,20 +1039,16 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
 
   try {
     const pool = await connectDB();
-    // Dept-based teams filter by Staff.DepartmentId; loan_status teams filter by ConfigLoanStatus.Name.
-    // Loan_status teams also need REPORT_Loans_Extension + ConfigLoanStatus joins.
-    let teamFilter, extraJoin;
-    if (teamDef.departmentId) {
-      teamFilter = `s.DepartmentId = ${teamDef.departmentId} AND s.EmployeeStatus = 1`;
-      extraJoin  = '';
-    } else {
-      teamFilter = teamDef.clsFilter;
-      extraJoin  = `
-      LEFT JOIN REPORT_Loans_Extension rle WITH (NOLOCK) ON t.ApplicationID = rle.ApplicationID
-      LEFT JOIN ConfigLoanStatus       cls WITH (NOLOCK) ON rle.ConfigLoanStatusId = cls.ConfigLoanStatusId`;
-    }
+    // All teams filter by UsedForKPI/SpecifiedKPIGrp (primary) or fallback DeptId.
+    const primaryFilter = `(ct.UsedForKPI = 1 AND ${teamDef.kpiGrp})`;
+    const fallbackFilter = teamDef.fallbackDeptId
+      ? ` OR (s.DepartmentId = ${teamDef.fallbackDeptId} AND s.EmployeeStatus = 1)`
+      : '';
+    const teamFilter = `(${primaryFilter}${fallbackFilter})`;
+
     const staffJoin = `LEFT JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      LEFT JOIN ConfigTaskStatus ts WITH (NOLOCK) ON t.TaskStatusID = ts.ConfigTaskStatusID${extraJoin}`;
+      LEFT JOIN ConfigTasks ct WITH (NOLOCK) ON t.ConfigTaskId = ct.ConfigTaskId
+      LEFT JOIN ConfigTaskStatus ts WITH (NOLOCK) ON t.TaskStatusID = ts.ConfigTaskStatusID`;
     // UNION guarantees both overdue (real-time TAT > SLA) and at-risk tasks are shown.
     // TAT = DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0 for all active tasks.
     // slaExpr: custom target hours from Settings if configured, else DB t.SLAInHours.
@@ -1716,6 +1662,17 @@ app.listen(PORT, async () => {
       // Resolve effective reporting date before warming caches.
       await resolveEffectiveDate();
       setInterval(resolveEffectiveDate, 60 * 60 * 1000);
+
+      // Discover dynamic KPI groups before first cache warm so team cards include them.
+      // Also runs every 60 s independently so new ConfigTasks entries appear within ~1 min
+      // without requiring a backend restart or waiting for the 5-min teams cache to expire.
+      await refreshDynamicGroups().catch(err =>
+        console.warn('[startup] dynamic groups discovery failed (non-fatal):', err.message)
+      );
+      setInterval(
+        () => refreshDynamicGroups().catch(err => console.warn('[dynamic teams] interval refresh failed:', err.message)),
+        60 * 1000
+      );
 
       // History (90-day scan) is intentionally excluded from startup warmup.
       // It is expensive on cold start and can exhaust the connection pool.

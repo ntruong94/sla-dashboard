@@ -28,7 +28,7 @@ function fmtHMS(hours) {
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
-const DEFAULT_SETTINGS = { targets: {}, refreshMin: 5, atRiskPct: 87.5, modalTaskCount: 10, loanTargets: { received: 10, approved: 10, settled: 10 } };
+const DEFAULT_SETTINGS = { targets: {}, groupOrder: [], refreshMin: 5, atRiskPct: 87.5, modalTaskCount: 50, loanTargets: { received: 10, approved: 10, settled: 10 } };
 
 function normalizeTask(t, settings = {}) {
   // Use RealtimeTAT (DATEDIFF computed in SQL) when available; fall back to stored TotalHoursOnTask.
@@ -136,6 +136,26 @@ function getStoredUser() {
   try { return JSON.parse(localStorage.getItem('sla_user') || '{}'); } catch { return {}; }
 }
 
+// Per-user settings key — isolates settings across different accounts on the same browser.
+function settingsKey(email) {
+  return email ? `sla_dash_settings_${email}` : 'sla_dash_settings';
+}
+
+function loadSettings(email) {
+  try {
+    const saved = localStorage.getItem(settingsKey(email));
+    if (!saved) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(saved);
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      targets:     { ...DEFAULT_SETTINGS.targets,     ...(parsed.targets     || {}) },
+      groupOrder:  Array.isArray(parsed.groupOrder)   ? parsed.groupOrder    : [],
+      loanTargets: { ...DEFAULT_SETTINGS.loanTargets, ...(parsed.loanTargets || {}) },
+    };
+  } catch { return DEFAULT_SETTINGS; }
+}
+
 // â”€â”€â”€ Root App â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function App() {
@@ -149,6 +169,10 @@ export default function App() {
     setUserRole(user.role || 'viewer');
     setError('');
     setLoading(true);
+    // Load this user's own settings (isolated per email address)
+    const userSettings = loadSettings(user.email);
+    settingsRef.current = userSettings;
+    setSettings(userSettings);
     setAuthed(true);
   }, []);
   const handleLogout = useCallback(() => {
@@ -180,17 +204,8 @@ export default function App() {
   const [loanModal, setLoanModal]     = useState(null); // { type, label } | null
   const [loanDetail, setLoanDetail]   = useState({ data: [], loading: false, error: null });
   const [settings, setSettings]       = useState(() => {
-    try {
-      const saved = localStorage.getItem('sla_dash_settings');
-      if (!saved) return DEFAULT_SETTINGS;
-      const parsed = JSON.parse(saved);
-      return {
-        ...DEFAULT_SETTINGS,
-        ...parsed,
-        targets:     { ...DEFAULT_SETTINGS.targets,     ...(parsed.targets     || {}) },
-        loanTargets: { ...DEFAULT_SETTINGS.loanTargets, ...(parsed.loanTargets || {}) },
-      };
-    } catch { return DEFAULT_SETTINGS; }
+    const { email } = getStoredUser();
+    return loadSettings(email);
   });
 
   // Watermark — fixed to viewport centre, no parallax
@@ -202,10 +217,10 @@ export default function App() {
   useEffect(() => { teamsRef.current = teams; },    [teams]);
 
   // Safety-net: always persist settings to localStorage whenever they change.
-  // This ensures Apply changes is never the only write path, and that settings
-  // survive page refresh, logout/login, and backend restarts.
+  // Writes to the current user's own key so settings are isolated per account.
   useEffect(() => {
-    try { localStorage.setItem('sla_dash_settings', JSON.stringify(settings)); } catch (e) {
+    const { email } = getStoredUser();
+    try { localStorage.setItem(settingsKey(email), JSON.stringify(settings)); } catch (e) {
       console.warn('[settings] Failed to persist to localStorage:', e.message);
     }
   }, [settings]);
@@ -306,7 +321,8 @@ export default function App() {
   }, []);
   const closeLoanModal = useCallback(() => setLoanModal(null), []);
   const applySettings = useCallback((newSettings) => {
-    try { localStorage.setItem('sla_dash_settings', JSON.stringify(newSettings)); } catch {}
+    const { email } = getStoredUser();
+    try { localStorage.setItem(settingsKey(email), JSON.stringify(newSettings)); } catch {}
     // Update ref BEFORE setSettings so refreshData reads the new targets immediately
     settingsRef.current = newSettings;
     setSettings(newSettings);
@@ -334,9 +350,10 @@ export default function App() {
       .catch(err => console.warn('[settings history refresh] failed:', err.message));
   }, []);
   const resetSettings = useCallback(() => {
-    // Clear persisted settings first; the safety-net useEffect([settings]) will
+    // Clear this user's persisted settings; the safety-net useEffect([settings]) will
     // then write DEFAULT_SETTINGS back, which is identical to having no entry.
-    try { localStorage.removeItem('sla_dash_settings'); } catch {}
+    const { email } = getStoredUser();
+    try { localStorage.removeItem(settingsKey(email)); } catch {}
     settingsRef.current = DEFAULT_SETTINGS;
     setSettings(DEFAULT_SETTINGS);
   }, []);
@@ -346,13 +363,22 @@ export default function App() {
   // Settings-aware derived state — recomputes automatically when settings or raw data changes
   const tasksByTeam  = useMemo(() => groupTasksByTeam(rawTasks, settings), [rawTasks, settings]);
   const modalTasksByTeam = useMemo(() => groupTasksByTeam(modalRawTasks, settings), [modalRawTasks, settings]);
-  const teamsDisplay = useMemo(() => teams.map(team => {
-    const customTarget = settings.targets[team.id];
-    if (!customTarget) return team;
-    // Only override the display target. The backend already received the custom targets
-    // and computed overdue/sla correctly in SQL — no client-side recalculation needed.
-    return { ...team, target: customTarget };
-  }), [teams, settings.targets]);
+  const teamsDisplay = useMemo(() => {
+    const display = teams.map(team => {
+      const customTarget = settings.targets[team.id];
+      return customTarget ? { ...team, target: customTarget } : team;
+    });
+    const order = settings.groupOrder;
+    if (!order || order.length === 0) return display;
+    const orderMap = new Map(order.map((id, idx) => [id, idx]));
+    return [...display].sort((a, b) => (orderMap.get(a.id) ?? Infinity) - (orderMap.get(b.id) ?? Infinity));
+  }, [teams, settings.targets, settings.groupOrder]);
+  const alertsDisplay = useMemo(() => {
+    const order = settings.groupOrder;
+    if (!order || order.length === 0) return alerts;
+    const orderMap = new Map(order.map((id, idx) => [id, idx]));
+    return [...alerts].sort((a, b) => (orderMap.get(a.queueId) ?? Infinity) - (orderMap.get(b.queueId) ?? Infinity));
+  }, [alerts, settings.groupOrder]);
   const modalTeam  = teamsDisplay.find(t => t.id === modalTeamId) ?? null;
   const modalTaskLimit = modalTeam ? Math.min(settings.modalTaskCount, modalTeam.volume ?? settings.modalTaskCount) : settings.modalTaskCount;
   const modalTasks = modalTeam ? (modalTasksByTeam[modalTeam.id] || []).slice(0, modalTaskLimit) : [];
@@ -571,7 +597,7 @@ export default function App() {
                   </section>
                 )}
               </div>
-              <AlertsPanel alerts={alerts} onDismiss={dismissAlert}
+              <AlertsPanel alerts={alertsDisplay} onDismiss={dismissAlert}
                 atRiskPct={settings.atRiskPct} maxTasks={settings.modalTaskCount}
                 customTargets={settings.targets} enableDrillDown={false}/>
             </section>
@@ -590,7 +616,7 @@ export default function App() {
             toggleDim={toggleDim}
           />
         )}
-        {view === 'alerts'   && <AlertsView  alerts={alerts} onDismiss={dismissAlert}/>}
+        {view === 'alerts'   && <AlertsView  alerts={alertsDisplay} onDismiss={dismissAlert}/>}
         {view === 'settings' && <SettingsView teams={teams} settings={settings} onApply={applySettings} onReset={resetSettings}/>}
         {view === 'staff-list' && <StaffListView />}
         {view === 'admin' && userRole === 'admin' && <AdminView />}

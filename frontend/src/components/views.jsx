@@ -36,7 +36,7 @@ const TeamsView = ({ teams, onOpenTeam }) => {
             </tr>
           </thead>
           <tbody>
-            {[...teams].sort((a,b) => a.id - b.id).map(t => {
+            {teams.map(t => {
               const cls = slaClass(t.sla);
               return (
                 <tr key={t.id} onClick={() => onOpenTeam(t.id)} style={{cursor:'pointer'}}>
@@ -459,6 +459,7 @@ const AlertsView = ({ alerts, onDismiss }) => {
 const SettingsView = ({ teams, settings, onApply, onReset }) => {
   const makeDraft = (s) => ({
     targets:        { ...s.targets },
+    teamOrder:      Array.isArray(s.groupOrder) ? [...s.groupOrder] : [],
     refreshMin:     s.refreshMin,
     atRiskPct:      s.atRiskPct,
     modalTaskCount: s.modalTaskCount,
@@ -484,6 +485,52 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
   const setLoanTarget = (key, val) =>
     setDraft(d => ({ ...d, loanTargets: { ...d.loanTargets, [key]: val } }));
 
+  // Ordered team list for the drag-and-drop section (derived from draft.teamOrder)
+  const orderedDraftTeams = React.useMemo(() => {
+    if (!draft.teamOrder || draft.teamOrder.length === 0) return teams;
+    const teamMap = new Map(teams.map(t => [t.id, t]));
+    const ordered   = draft.teamOrder.filter(id => teamMap.has(id)).map(id => teamMap.get(id));
+    const remaining = teams.filter(t => !draft.teamOrder.includes(t.id));
+    return [...ordered, ...remaining];
+  }, [teams, draft.teamOrder]);
+
+  // Drag-and-drop state
+  const dragIdRef                       = React.useRef(null);
+  const [draggingId, setDraggingId]     = React.useState(null);
+  const [dragOverId, setDragOverId]     = React.useState(null);
+
+  const onDragStart = (e, id) => {
+    dragIdRef.current = id;
+    setDraggingId(id);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+  const onDragEnd = () => {
+    setDraggingId(null);
+    setDragOverId(null);
+    dragIdRef.current = null;
+  };
+  const onDragOver = (e, id) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverId(id);
+  };
+  const onDrop = (e, targetId) => {
+    e.preventDefault();
+    const srcId = dragIdRef.current;
+    setDraggingId(null);
+    setDragOverId(null);
+    dragIdRef.current = null;
+    if (!srcId || srcId === targetId) return;
+    const currentIds = orderedDraftTeams.map(t => t.id);
+    const fromIdx = currentIds.indexOf(srcId);
+    const toIdx   = currentIds.indexOf(targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const newOrder = [...currentIds];
+    newOrder.splice(fromIdx, 1);
+    newOrder.splice(toIdx, 0, srcId);
+    setDraft(d => ({ ...d, teamOrder: newOrder }));
+  };
+
   const validate = (d) => {
     if (!d.refreshMin || d.refreshMin < 1 || d.refreshMin > 60)
       return 'Refresh interval must be between 1 and 60 minutes.';
@@ -506,6 +553,7 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
     try {
       onApply({
         targets:        draft.targets,
+        groupOrder:     draft.teamOrder,
         refreshMin:     Number(draft.refreshMin),
         atRiskPct:      Number(draft.atRiskPct),
         modalTaskCount: Number(draft.modalTaskCount),
@@ -567,13 +615,30 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
       </section>
 
       <section className="trend-card" style={{padding:'22px 26px'}}>
-        <h2 className="section-title" style={{marginBottom:4}}>SLA Targets per Team</h2>
-        <div className="section-sub" style={{marginBottom:18}}>Turnaround time target (hours). Saved to So Ezy config on apply.</div>
+        <h2 className="section-title" style={{marginBottom:4}}>Team order and SLA target</h2>
+        <div className="section-sub" style={{marginBottom:18}}>Drag rows to reorder teams across all views. Set turnaround time target (hours) per team.</div>
 
         <div className="settings-grid">
-          {teams.map(t => (
-            <div key={t.id} className="setting-row">
+          {orderedDraftTeams.map(t => (
+            <div key={t.id} className="setting-row"
+              draggable
+              onDragStart={e => onDragStart(e, t.id)}
+              onDragEnd={onDragEnd}
+              onDragOver={e => onDragOver(e, t.id)}
+              onDrop={e => onDrop(e, t.id)}
+              style={{
+                opacity:    draggingId === t.id ? 0.45 : 1,
+                outline:    dragOverId === t.id && draggingId !== t.id ? '2px solid var(--brand)' : 'none',
+                transition: 'opacity 0.12s',
+                cursor:     'grab',
+              }}
+            >
               <div className="setting-meta">
+                <svg width="10" height="16" viewBox="0 0 10 16" style={{color:'var(--ink-muted)',flexShrink:0,marginRight:4,opacity:0.5}} fill="currentColor" aria-hidden="true">
+                  <circle cx="3" cy="3" r="1.4"/><circle cx="7" cy="3" r="1.4"/>
+                  <circle cx="3" cy="8" r="1.4"/><circle cx="7" cy="8" r="1.4"/>
+                  <circle cx="3" cy="13" r="1.4"/><circle cx="7" cy="13" r="1.4"/>
+                </svg>
                 <span style={{width:8,height:24,borderRadius:2,background:TEAM_COLORS[t.name]}}/>
                 <div>
                   <div style={{fontWeight:600,fontSize:14}}>{t.name}</div>
