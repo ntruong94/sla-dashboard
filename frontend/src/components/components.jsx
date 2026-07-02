@@ -94,8 +94,11 @@ const TeamCard = ({ team, onClick }) => {
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}>
       <div className="card-head">
         <div>
-          <div className="card-dept">{team.dept}</div>
-          <h3 className="card-team">{team.name}</h3>
+          <div className="card-dept">{team.dept === 'KPI Group' ? 'KPI GROUP' : ''}</div>
+          <h3 className="card-team">
+            {team.name}
+            {team.tooltip && <InfoTip text={team.tooltip} width={320}/>}
+          </h3>
         </div>
         <span className={`badge ${cls}`}>
           <span className="badge-dot" />

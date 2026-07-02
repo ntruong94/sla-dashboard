@@ -70,7 +70,13 @@ function buildTargetQS(targets = {}) {
 }
 
 export const getHealth    = ()               => request('/api/health');
-export const getKpiSummary = (targets = {}) => request(`/api/kpi-summary${buildTargetQS(targets)}`);
+export const getKpiSummary = (targets = {}, visibleTeamIds = null) => {
+  const qs = buildTargetQS(targets);
+  const vtParam = visibleTeamIds && visibleTeamIds.length > 0
+    ? (qs ? '&' : '?') + 'visibleTeams=' + visibleTeamIds.join(',')
+    : '';
+  return request(`/api/kpi-summary${qs}${vtParam}`);
+};
 export const getTeams     = (targets = {})  => request(`/api/teams${buildTargetQS(targets)}`);
 export const getHistory   = (range = '90d', targets = {}) => {
   const tqs = buildTargetQS(targets);
@@ -110,6 +116,8 @@ export const getStaffDepartments  = ()       => request('/api/staff/departments'
 export const getStaffAbsentToday  = ()       => request('/api/staff/absent-today');
 export const getStaffByDepartment = (deptId) => request(`/api/staff/department/${deptId}`);
 
+export const getTaskCodes = () => request('/api/task-codes');
+
 export const getTasks = (teamId, status, scope) => {
   const params = new URLSearchParams();
   if (teamId != null) params.set('team', teamId);
@@ -118,3 +126,13 @@ export const getTasks = (teamId, status, scope) => {
   const qs = params.toString();
   return request('/api/tasks' + (qs ? '?' + qs : ''));
 };
+
+// ── Global admin settings ────────────────────────────────────────────────────
+// GET /api/settings — all users read global settings on login and refresh
+export const getGlobalSettings  = ()     => request('/api/settings');
+// PUT /api/admin/settings — admin saves global settings; persisted in DB
+export const saveGlobalSettings = (data) => request('/api/admin/settings', {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(data),
+});

@@ -32,20 +32,18 @@ function sendError(res, status, publicMessage, err) {
 }
 
 // --- Team definitions ---------------------------------------------------------
-// 9 teams. Primary identification: ConfigTasks.UsedForKPI = 1 AND SpecifiedKPIGrp LIKE '...'
-// Fallback (dept-based teams only): Staff.DepartmentId = N AND Staff.EmployeeStatus = 1
-// Teams 5 (CLA), 6 (Funder Submission), 7 (Funder MIR) have no dept fallback — count 0 if no KPI match.
-const TEAMS = [
-  { id: 1, name: 'Data Entry',        dept: 'Origination',  target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Data%Entry%'",                                              fallbackDeptId: 101  },
-  { id: 2, name: 'Valuations',        dept: 'Origination',  target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Valuation%'",                                                fallbackDeptId: 110  },
-  { id: 3, name: 'Assessments',       dept: 'Credit',       target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Assessment%'",                                              fallbackDeptId: null },
-  { id: 4, name: 'Packaging & QA',    dept: 'Credit',       target: 4, kpiGrp: "(ct.SpecifiedKPIGrp LIKE N'%Packaging%' OR ct.SpecifiedKPIGrp LIKE N'%QA%')",          fallbackDeptId: 122  },
-  { id: 5, name: 'CLA',               dept: 'Credit',       target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%CLA%'",                                                     fallbackDeptId: null },
-  { id: 6, name: 'Funder Submission', dept: 'Credit',       target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Funder%Submission%'",                                       fallbackDeptId: null },
-  { id: 7, name: 'Funder MIR',        dept: 'Credit',       target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Funder%MIR%'",                                              fallbackDeptId: null },
-  { id: 8, name: 'Settlement',        dept: 'Settlement',   target: 4, kpiGrp: "ct.SpecifiedKPIGrp LIKE N'%Settlement%'",                                              fallbackDeptId: null },
-];
-const FALLBACK_DEPT_IDS = TEAMS.filter(t => t.fallbackDeptId).map(t => t.fallbackDeptId);
+// Teams are discovered dynamically from the database — nothing is hardcoded.
+// See refreshTeams() below and CLAUDE.md Section 6 for the two-rule spec:
+//   Rule 1 (KPI group — PRECEDENCE): ct.UsedForKPI = 1 AND non-empty ct.SpecifiedKPIGrp
+//           → one team per distinct SpecifiedKPIGrp value; card label = SpecifiedKPIGrp.
+//   Rule 2 (Department fallback): every Department that has ≥1 task by active staff
+//           today → one team per department; card label = Department.Name with the
+//           trailing ' Department' suffix stripped. Rule 2 has NO UsedForKPI filter
+//           — it counts ALL tasks assigned to active staff in that department.
+// Precedence: if a Rule-2 dept team's display name equals a Rule-1 KPI-group name
+// (case-insensitive, trimmed), the dept team is suppressed so only the KPI-tagged
+// tasks appear on that card. This is the switch that changes Data Entry's volume
+// from 22 (dept-wide) → 8 (kpi-tagged only) the moment a code is tagged.
 
 // --- Effective reporting date -----------------------------------------------
 // The dashboard operates against a reporting DB refreshed nightly from the live
@@ -119,121 +117,237 @@ function computeDates() {
   return { today, prev, todayNext: nextDay(today), prevNext: nextDay(prev) };
 }
 
-// Grouping priority (source of truth — see CLAUDE.md Section 6):
-//   Rule 1 (PRIORITY): Tasks with ct.UsedForKPI = 1 AND non-empty ct.SpecifiedKPIGrp
-//           are grouped by SpecifiedKPIGrp (static team patterns + dynamic teams).
-//   Rule 2 (FALLBACK): Tasks with ct.UsedForKPI IS NULL AND ct.SpecifiedKPIGrp IS NULL/empty
-//           fall back to s.DepartmentId, requiring s.EmployeeStatus = 1.
-// Rule 1 and Rule 2 are mutually exclusive by design (no double counting).
-// Tasks that satisfy neither rule (e.g. UsedForKPI=1 with kpiGrp not matching any team,
-// or UsedForKPI IS NULL with a non-null kpiGrp) are excluded entirely.
-const _FALLBACK_DEPT_IDS = TEAMS.filter(t => t.fallbackDeptId).map(t => t.fallbackDeptId).join(', ');
-const _NULL_KPIGRP    = `(ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'')`;
+// Grouping (source of truth — see CLAUDE.md Section 6):
+//   Rule 1 (KPI group): ct.UsedForKPI = 1 AND non-empty ct.SpecifiedKPIGrp → group by SpecifiedKPIGrp.
+//   Rule 2 (Department fallback): tasks assigned to any active staff member in one of the
+//           currently-known dept teams — NO UsedForKPI restriction.
+// Rule 1 WHEN clauses run first in every CASE, so a task matching both rules is
+// placed in its Rule 1 team; Rule 2 catches everything else assigned to a known dept.
+const _NULL_KPIGRP     = `(ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'')`;
 const _NONEMPTY_KPIGRP = `(ct.SpecifiedKPIGrp IS NOT NULL AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) <> N'')`;
 const _RULE1_MATCH = `(ct.UsedForKPI = 1 AND ${_NONEMPTY_KPIGRP})`;
-const _RULE2_MATCH = `(ct.UsedForKPI IS NULL AND ${_NULL_KPIGRP})`;
-const TEAM_FILTER = `(${_RULE1_MATCH} OR (${_RULE2_MATCH} AND s.DepartmentId IN (${_FALLBACK_DEPT_IDS}) AND s.EmployeeStatus = 1))`;
+// Rule 2 no longer restricts on ConfigTasks. Kept as a template-literal placeholder
+// so existing `(${_RULE2_MATCH} AND s.DepartmentId = X ...)` composed filters remain
+// syntactically valid and semantically unchanged (SQL Server folds `1 = 1` away).
+const _RULE2_MATCH = `(1 = 1)`;
+
 // SQL JOIN required to access ConfigTasks.UsedForKPI and ConfigTasks.SpecifiedKPIGrp.
 const CONFIG_TASKS_JOIN = `
       LEFT JOIN ConfigTasks ct WITH (NOLOCK) ON t.ConfigTaskId = ct.ConfigTaskId`;
 
-// --- Dynamic KPI groups -------------------------------------------------------
-// If users add new SpecifiedKPIGrp values to ConfigTasks (UsedForKPI=1) that are
-// not matched by any of the 9 defined team kpiGrp patterns, those groups are
-// auto-discovered, assigned sequential IDs from 100, and rendered as additional
-// team cards after "Ezy Client Care". Sorted alphabetically for stable ordering.
-let _dynamicTeams = [];
+// SQL string escape (single quotes → doubled).
+function sqlStr(s) { return String(s == null ? '' : s).replace(/'/g, "''"); }
 
-// Build SQL NOT conditions to exclude all 9 known team patterns from discovery query.
-function buildKnownGroupsExclusion() {
-  return TEAMS.map(t => `NOT (${t.kpiGrp})`).join('\n        AND ');
+// --- Dynamic team discovery ---------------------------------------------------
+// _teams is populated by refreshTeams() at startup and every 60 s. Each entry:
+//   { id, name, dept, target, kind: 'kpi' | 'dept', kpiGrpValue?, departmentId? }
+// IDs are stable across refreshes for teams that persist by identity
+// (kpi:<name> or dept:<deptId>); new teams get the lowest unused positive integer.
+let _teams = [];
+
+function teamKey(t) {
+  return t.kind === 'kpi' ? `kpi:${t.name}` : `dept:${t.departmentId}`;
 }
 
-// Query DB for additional SpecifiedKPIGrp values not belonging to any of the 9 teams.
-async function refreshDynamicGroups() {
+// Filter fragment for a single team (used by per-team endpoints).
+function buildTeamFilterFor(team) {
+  if (team.kind === 'kpi') {
+    return `(${_RULE1_MATCH} AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'${sqlStr(team.kpiGrpValue)}')`;
+  }
+  return `(${_RULE2_MATCH} AND s.DepartmentId = ${team.departmentId} AND s.EmployeeStatus = 1)`;
+}
+
+// Builds a scoped OR-filter for KPI queries when only a subset of teams is visible
+// (e.g. after hiddenTeams settings are applied on the frontend).
+function buildKpiScopeFilter(teamIds) {
+  const allTeams = getAllTeams();
+  const filters = teamIds
+    .map(id => allTeams.find(t => t.id === id))
+    .filter(Boolean)
+    .map(t => buildTeamFilterFor(t));
+  return filters.length ? `(${filters.join(' OR ')})` : '(1 = 0)';
+}
+
+// Global filter admitting only tasks classifiable under Rule 1 or Rule 2.
+// Rule 2 branch is restricted to the currently-known dept ids so a task in
+// an unknown dept doesn't inflate global aggregates.
+function getTeamFilter() {
+  const deptIds = _teams.filter(t => t.kind === 'dept').map(t => t.departmentId);
+  const rule2 = deptIds.length
+    ? `(${_RULE2_MATCH} AND s.DepartmentId IN (${deptIds.join(', ')}) AND s.EmployeeStatus = 1)`
+    : '(1 = 0)';
+  return `(${_RULE1_MATCH} OR ${rule2})`;
+}
+
+// Template-literal wrapper so existing `${TEAM_FILTER}` interpolations resolve
+// to the current getTeamFilter() output at query-build time.
+const TEAM_FILTER = { toString: () => getTeamFilter() };
+
+// Strip a trailing ' Department' word (case-insensitive) from a raw Department.Name
+// so 'Data Entry Department' → 'Data Entry'. Leaves other names untouched.
+function stripDeptSuffix(name) {
+  return String(name || '').replace(/\s+department\s*$/i, '').trim();
+}
+
+// Refresh the team list from the database.
+// Two independent discovery queries feed a single merged list:
+//   Q1 (Rule 1): distinct non-empty SpecifiedKPIGrp values where UsedForKPI = 1.
+//   Q2 (Rule 2): every Department that has ≥1 task by active staff for the current
+//                effective reporting day. No UsedForKPI filter — a card appears for
+//                any department currently doing work.
+async function refreshTeams() {
   try {
     const pool = await connectDB();
-    const excl = buildKnownGroupsExclusion();
-    const res = await pool.request().query(`
-      SELECT DISTINCT LTRIM(RTRIM(ct.SpecifiedKPIGrp)) AS SpecifiedKPIGrp
-      FROM ConfigTasks ct WITH (NOLOCK)
-      WHERE ct.UsedForKPI = 1
-        AND ct.SpecifiedKPIGrp IS NOT NULL
-        AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) <> N''
-        AND ${excl}
-      ORDER BY LTRIM(RTRIM(ct.SpecifiedKPIGrp))
-    `);
-    const groups = res.recordset || [];
-    const newTeams = groups.map((r, i) => {
-      const name = r.SpecifiedKPIGrp.trim(); // JS-side safety trim
-      return {
-        id:            100 + i,
-        name,
-        dept:          'Other',
-        target:        4,
-        kpiGrp:        `LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'${name.replace(/'/g, "''")}'`,
-        fallbackDeptId: null,
-        isDynamic:     true,
-      };
+    const { today, todayNext } = computeDates();
+    const [kpiRes, deptRes] = await Promise.all([
+      pool.request().query(`
+        SELECT DISTINCT LTRIM(RTRIM(ct.SpecifiedKPIGrp)) AS grp
+        FROM ConfigTasks ct WITH (NOLOCK)
+        WHERE ct.UsedForKPI = 1
+          AND ct.SpecifiedKPIGrp IS NOT NULL
+          AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) <> N''
+        ORDER BY LTRIM(RTRIM(ct.SpecifiedKPIGrp))
+      `),
+      pool.request().query(`
+        SELECT DISTINCT s.DepartmentId, d.Name AS DepartmentName
+        FROM Tasks t WITH (NOLOCK)
+        INNER JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+        INNER JOIN Department d WITH (NOLOCK) ON s.DepartmentId = d.DepartmentId
+        WHERE t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
+          AND s.EmployeeStatus = 1
+          AND s.DepartmentId IS NOT NULL
+          AND d.Name IS NOT NULL
+        ORDER BY d.Name
+      `),
+    ]);
+
+    const kpiTeams = (kpiRes.recordset || [])
+      .map(r => (r.grp || '').trim())
+      .filter(Boolean)
+      .map(name => ({ kind: 'kpi', name, dept: 'KPI Group', target: 4, kpiGrpValue: name }));
+
+    // Precedence: drop any dept team whose display name (stripped, lowercased) matches
+    // an existing KPI-group team. This is the mechanism by which tagging a task code
+    // with `UsedForKPI=1 AND SpecifiedKPIGrp='Data Entry'` replaces the dept-wide
+    // Data Entry card with a KPI-tagged-only card.
+    const kpiNamesLc = new Set(kpiTeams.map(t => t.name.toLowerCase()));
+    const deptTeams = (deptRes.recordset || [])
+      .filter(r => r.DepartmentId != null && r.DepartmentName)
+      .map(r => {
+        const displayName = stripDeptSuffix(r.DepartmentName) || String(r.DepartmentName).trim();
+        return {
+          kind: 'dept',
+          name: displayName,
+          dept: displayName,
+          target: 4,
+          departmentId: r.DepartmentId,
+          departmentName: String(r.DepartmentName).trim(),
+        };
+      })
+      .filter(t => !kpiNamesLc.has(t.name.toLowerCase()));
+
+    const merged = [...kpiTeams, ...deptTeams];
+    // Preserve existing IDs for teams that persist across refreshes.
+    const oldById = new Map(_teams.map(t => [teamKey(t), t.id]));
+    const usedIds = new Set();
+    const withIds = merged.map(t => {
+      const prev = oldById.get(teamKey(t));
+      if (prev != null && !usedIds.has(prev)) { usedIds.add(prev); return { ...t, id: prev }; }
+      return { ...t, id: null };
+    });
+    let next = 1;
+    for (const t of withIds) {
+      if (t.id == null) {
+        while (usedIds.has(next)) next++;
+        t.id = next;
+        usedIds.add(next);
+      }
+    }
+    // Display order: KPI teams (alphabetical) first, then dept teams (alphabetical).
+    withIds.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === 'kpi' ? -1 : 1;
+      return a.name.localeCompare(b.name);
     });
 
-    // Detect changes — only log and invalidate cache when the team list actually changed
-    const oldSig = _dynamicTeams.map(t => t.name).join('|');
-    const newSig  = newTeams.map(t => t.name).join('|');
+    const oldSig = _teams.map(t => `${teamKey(t)}#${t.id}`).join('|');
+    const newSig = withIds.map(t => `${teamKey(t)}#${t.id}`).join('|');
     const changed = oldSig !== newSig;
-    _dynamicTeams = newTeams;
+    _teams = withIds;
 
     if (changed) {
-      const label = _dynamicTeams.length > 0
-        ? `${_dynamicTeams.length} additional KPI group(s): ${_dynamicTeams.map(t => t.name).join(', ')}`
-        : 'no dynamic KPI groups';
-      console.log(`[dynamic teams] change detected — ${label}`);
+      console.log(`[teams] refresh — ${kpiTeams.length} KPI group(s), ${deptTeams.length} dept team(s): ${_teams.map(t => t.name).join(', ')}`);
       // Invalidate teams cache so the very next /api/teams request fetches fresh data
       _cache.teams.data = null;
       _cache.teams.ts   = 0;
     }
   } catch (err) {
-    console.error('[dynamic teams] refresh failed:', err.message);
-    // Keep previous _dynamicTeams on error — do not reset
+    console.error('[teams] refresh failed:', err.message);
+    // Keep previous _teams on error — do not reset
   }
 }
 
-// Returns all 9 static teams + any dynamic teams discovered from the DB.
-function getAllTeams() { return [...TEAMS, ..._dynamicTeams]; }
+// All currently-known teams (KPI-group teams + dept teams), in display order.
+function getAllTeams() { return _teams; }
 
-// Build SQL CASE for team id — includes dynamic teams discovered at runtime.
+// --- Team tooltip ------------------------------------------------------------
+// Rule 2 team → "<Name> includes tasks of Dept <id>: <Department.Name>".
+// Rule 1 team → "<Name> includes task codes: '<code1>','<code2>',..." — every
+// TaskCode in ConfigTasks with UsedForKPI = 1 whose SpecifiedKPIGrp equals the
+// team's SpecifiedKPIGrp value (exact, trimmed).
+async function fetchTeamTooltips() {
+  const pool  = await connectDB();
+  const teams = getAllTeams();
+  const hasKpi = teams.some(t => t.kind === 'kpi');
+
+  const codesRes = hasKpi
+    ? await pool.request().query(`
+        SELECT TaskCode, LTRIM(RTRIM(SpecifiedKPIGrp)) AS grp
+        FROM ConfigTasks WITH (NOLOCK)
+        WHERE UsedForKPI = 1 AND SpecifiedKPIGrp IS NOT NULL AND LTRIM(RTRIM(SpecifiedKPIGrp)) <> N''
+        ORDER BY TaskCode
+      `)
+    : { recordset: [] };
+
+  const tooltips = new Map();
+  teams.forEach(team => {
+    if (team.kind === 'dept') {
+      tooltips.set(team.id, `All tasks from ${team.name} - DeptID: ${team.departmentId}`);
+    } else {
+      const codes = codesRes.recordset
+        .filter(r => r.grp === team.kpiGrpValue)
+        .map(r => `'${r.TaskCode}'`);
+      tooltips.set(team.id, codes.length
+        ? `${team.name} includes task codes: ${codes.join(',')}`
+        : `${team.name} includes task codes: (none configured)`);
+    }
+  });
+  return tooltips;
+}
+
+// Build SQL CASE for team id.
 // Usage: CASE ${getTeamIdCase()} END AS teamId
 function getTeamIdCase() {
-  const all = getAllTeams();
-  const deptPrimary = all.filter(t => t.fallbackDeptId);  // has dept fallback
-  const kpiOnly     = all.filter(t => !t.fallbackDeptId); // no dept fallback
+  const kpi = _teams.filter(t => t.kind === 'kpi');
+  const dep = _teams.filter(t => t.kind === 'dept');
   return [
-    // Rule 1 (PRIORITY): UsedForKPI=1 AND non-empty SpecifiedKPIGrp matching team pattern (incl. dynamic teams)
-    ...kpiOnly.map(t     => `WHEN ${_RULE1_MATCH} AND ${t.kpiGrp} THEN ${t.id}`),
-    ...deptPrimary.map(t => `WHEN ${_RULE1_MATCH} AND ${t.kpiGrp} THEN ${t.id}`),
-    // Rule 2 (FALLBACK): UsedForKPI IS NULL AND SpecifiedKPIGrp IS NULL/empty, routed by active staff DeptId
-    ...deptPrimary.map(t => `WHEN ${_RULE2_MATCH} AND s.DepartmentId = ${t.fallbackDeptId} AND s.EmployeeStatus = 1 THEN ${t.id}`)
+    ...kpi.map(t => `WHEN ${_RULE1_MATCH} AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'${sqlStr(t.kpiGrpValue)}' THEN ${t.id}`),
+    ...dep.map(t => `WHEN ${_RULE2_MATCH} AND s.DepartmentId = ${t.departmentId} AND s.EmployeeStatus = 1 THEN ${t.id}`),
   ].join(' ');
 }
 
-// Build SQL CASE for team name — includes dynamic teams.
+// Build SQL CASE for team name.
 // Usage: CASE ${getTeamNameCase()} END AS QueueName
 function getTeamNameCase() {
-  const all = getAllTeams();
-  const deptPrimary = all.filter(t => t.fallbackDeptId);
-  const kpiOnly     = all.filter(t => !t.fallbackDeptId);
+  const kpi = _teams.filter(t => t.kind === 'kpi');
+  const dep = _teams.filter(t => t.kind === 'dept');
   return [
-    // Rule 1 (PRIORITY): UsedForKPI=1 AND non-empty SpecifiedKPIGrp matching team pattern (incl. dynamic teams)
-    ...kpiOnly.map(t     => `WHEN ${_RULE1_MATCH} AND ${t.kpiGrp} THEN N'${t.name.replace(/'/g, "''")}'`),
-    ...deptPrimary.map(t => `WHEN ${_RULE1_MATCH} AND ${t.kpiGrp} THEN N'${t.name.replace(/'/g, "''")}'`),
-    // Rule 2 (FALLBACK): UsedForKPI IS NULL AND SpecifiedKPIGrp IS NULL/empty, routed by active staff DeptId
-    ...deptPrimary.map(t => `WHEN ${_RULE2_MATCH} AND s.DepartmentId = ${t.fallbackDeptId} AND s.EmployeeStatus = 1 THEN N'${t.name.replace(/'/g, "''")}'`)
+    ...kpi.map(t => `WHEN ${_RULE1_MATCH} AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'${sqlStr(t.kpiGrpValue)}' THEN N'${sqlStr(t.name)}'`),
+    ...dep.map(t => `WHEN ${_RULE2_MATCH} AND s.DepartmentId = ${t.departmentId} AND s.EmployeeStatus = 1 THEN N'${sqlStr(t.name)}'`),
   ].join(' ');
 }
 
 // --- Custom-target helpers ----------------------------------------------------
-// Parse ?t1=2&t2=4&t3=4&t4=4&t5=4&t6=4 into { 1: 2.0, 2: 4.0, ... }
-// Includes dynamic team IDs (100+) so custom targets work for dynamic groups too.
+// Parse ?tN=hours for every currently-known team id.
 function parseTargets(query) {
   const out = {};
   getAllTeams().forEach(team => {
@@ -242,23 +356,18 @@ function parseTargets(query) {
   });
   return out;
 }
-// Build a SQL CASE expression that returns the custom target hours for each team
-// (based on the team-identifying column), falling back to t.SLAInHours for
-// teams that don't have a custom target configured.
+// Build a SQL CASE expression that returns the custom target hours per team,
+// falling back to t.SLAInHours for teams without a configured override.
 function buildTargetExpr(customTargets) {
   if (!customTargets || Object.keys(customTargets).length === 0) return 't.SLAInHours';
-  const all = getAllTeams();
-  const primaryCases = all.map(team => {
+  const cases = _teams.map(team => {
     const h = customTargets[team.id];
     if (!h) return null;
-    return `WHEN ${_RULE1_MATCH} AND ${team.kpiGrp} THEN ${h}`;
+    if (team.kind === 'kpi') {
+      return `WHEN ${_RULE1_MATCH} AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'${sqlStr(team.kpiGrpValue)}' THEN ${h}`;
+    }
+    return `WHEN ${_RULE2_MATCH} AND s.DepartmentId = ${team.departmentId} AND s.EmployeeStatus = 1 THEN ${h}`;
   }).filter(Boolean);
-  const fallbackCases = all.filter(t => t.fallbackDeptId).map(team => {
-    const h = customTargets[team.id];
-    if (!h) return null;
-    return `WHEN ${_RULE2_MATCH} AND s.DepartmentId = ${team.fallbackDeptId} AND s.EmployeeStatus = 1 THEN ${h}`;
-  }).filter(Boolean);
-  const cases = [...primaryCases, ...fallbackCases]; // Rule 1 (kpiGrp) first, Rule 2 (DeptId) fallback
   if (cases.length === 0) return 't.SLAInHours';
   return `CASE ${cases.join(' ')} ELSE t.SLAInHours END`;
 }
@@ -287,6 +396,8 @@ const _cache = {
   kpi:     { data: null, ts: 0, pending: null },
   teams:   { data: null, ts: 0, pending: null },
   history: { data: null, ts: 0, pending: null },
+  loans:   { data: null, ts: 0, pending: null },
+  alerts:  { data: null, ts: 0, pending: null },
 };
 
 function getCached(key, fetchFn) {
@@ -308,11 +419,15 @@ function getCached(key, fetchFn) {
   return Promise.reject(new Error(`[cache ${key}] no data and no pending fetch`));
 }
 
-async function fetchKpiData(customTargets = {}) {
+async function fetchKpiData(customTargets = {}, visibleTeamIds = null) {
   const NOW_SQL = getNowSql();
   const pool = await connectDB();
   const { today, prev, todayNext, prevNext } = computeDates();
   const targetExpr = buildTargetExpr(customTargets);
+  // Use a scoped filter when visible team IDs are supplied; fall back to the global filter.
+  const teamFilter = (visibleTeamIds && visibleTeamIds.length > 0)
+    ? buildKpiScopeFilter(visibleTeamIds)
+    : TEAM_FILTER;
 
   // Two parallel queries:
   // Q1: totalTasks, avgTat, totalOverdue � active/all tasks, filtered by DateCreated.
@@ -358,7 +473,7 @@ async function fetchKpiData(customTargets = {}) {
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
       ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID IN (1, 2, 4, 5, 6)
-        AND ${TEAM_FILTER}
+        AND ${teamFilter}
         AND t.DateCreated >= '${prev}' AND t.DateCreated < '${todayNext}'
     `),
     // SLA% uses DateCompleted � completed tasks regardless of when they were created.
@@ -389,7 +504,7 @@ async function fetchKpiData(customTargets = {}) {
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
       ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID = 2
-        AND ${TEAM_FILTER}
+        AND ${teamFilter}
         AND t.DateCompleted >= '${prev}' AND t.DateCompleted < '${todayNext}'
     `),
   ]);
@@ -413,8 +528,8 @@ async function fetchKpiData(customTargets = {}) {
 }
 
 async function fetchTeamsData(customTargets = {}) {
-  // Refresh dynamic groups so new SpecifiedKPIGrp values are included in this cycle.
-  await refreshDynamicGroups();
+  // Refresh team list so newly-added KPI groups / departments appear this cycle.
+  await refreshTeams();
   const NOW_SQL = getNowSql();
   const pool = await connectDB();
   const { today, prev, todayNext, prevNext } = computeDates();
@@ -424,7 +539,8 @@ async function fetchTeamsData(customTargets = {}) {
   // Q1: volume, avgTat, overdue — active/all tasks, DateCreated today.
   // Q2: volume/overdue/TAT deltas — DateCreated today + prev.
   // Q3: SLA% per team — completed tasks (status=2), DateCompleted today + prev.
-  const [result, delta, slaResult] = await Promise.all([
+  // Q4: tooltip metadata (task codes + dept names) — see fetchTeamTooltips().
+  const [result, delta, slaResult, tooltips] = await Promise.all([
     pool.request().query(`
       SELECT
         CASE ${getTeamIdCase()} END AS teamId,
@@ -494,6 +610,7 @@ async function fetchTeamsData(customTargets = {}) {
         AND t.DateCompleted >= '${prev}' AND t.DateCompleted < '${todayNext}'
       GROUP BY CASE ${getTeamIdCase()} END
     `),
+    fetchTeamTooltips(),
   ]);
 
   const round1 = v => Math.round((v || 0) * 10) / 10;
@@ -510,6 +627,7 @@ async function fetchTeamsData(customTargets = {}) {
       sla:     Math.round(sla.todaySla || 0),
       avgTat:  round1(row.avgTat),
       overdue: row.overdue || 0,
+      tooltip: tooltips.get(team.id) || '',
       deltas: {
         volume:  (d.todayVol     || 0) - (d.prevVol     || 0),
         sla:     parseFloat(((sla.todaySla || 0) - (sla.prevSla || 0)).toFixed(1)),
@@ -671,8 +789,14 @@ app.get('/api/kpi-summary', async (req, res) => {
   try {
     const customTargets = parseTargets(req.query);
     const hasCustom = Object.keys(customTargets).length > 0;
-    // Bypass cache when custom targets are set � serve fresh data with the correct thresholds.
-    res.json(hasCustom ? await fetchKpiData(customTargets) : await getCached('kpi', fetchKpiData));
+    const visibleTeams = req.query.visibleTeams
+      ? req.query.visibleTeams.split(',').map(Number).filter(n => n > 0)
+      : null;
+    const hasScope = visibleTeams && visibleTeams.length > 0;
+    // Bypass cache when custom targets or a scoped team list is provided.
+    res.json((hasCustom || hasScope)
+      ? await fetchKpiData(customTargets, visibleTeams)
+      : await getCached('kpi', fetchKpiData));
   } catch (err) {
     sendError(res, 500, 'Internal server error', err);
   }
@@ -786,14 +910,10 @@ app.get('/api/tasks', async (req, res) => {
     `;
 
     if (team) {
-      // team param = team id (1-9 static, 100+ dynamic); filter by kpiGrp or fallback DeptId
+      // team param = current team id (Rule 1 KPI group or Rule 2 dept team).
       const teamDef = getAllTeams().find(t => t.id === parseInt(team));
       if (teamDef) {
-        const primary = `(ct.UsedForKPI = 1 AND ${teamDef.kpiGrp})`;
-        const fallback = teamDef.fallbackDeptId
-          ? ` OR (s.DepartmentId = ${teamDef.fallbackDeptId} AND s.EmployeeStatus = 1)`
-          : '';
-        query += ` AND (${primary}${fallback})`;
+        query += ` AND ${buildTeamFilterFor(teamDef)}`;
       }
     }
     if (status === 'ok') {
@@ -877,7 +997,8 @@ async function fetchHistoryData(range = '90d', customTargets = {}) {
 }
 
 app.get('/api/history', async (req, res) => {
-  const range = req.query.range || '90d';
+  const ALLOWED_RANGES = new Set(['7d', '30d', '90d']);
+  const range = ALLOWED_RANGES.has(req.query.range) ? req.query.range : '90d';
 
   if (USE_MOCK) {
     const days = historyLookbackDays(range);
@@ -910,45 +1031,71 @@ app.get('/api/history', async (req, res) => {
 // Key = "<teamId>-<severity>" � survives API re-calls so "3h ago" stays accurate.
 const _alertFirstSeen = new Map();
 
+function buildAlerts(rows) {
+  const alerts = [];
+  const activeKeys = new Set();
+  for (const row of rows) {
+    const pct = row.total > 0 ? Math.round((row.compliant / row.total) * 100) : 100;
+    let severity = null;
+    if      (pct < 75) severity = 'critical';
+    else if (pct < 90) severity = 'warning';
+    if (!severity) continue;
+
+    const key = `${row.QueueId}-${severity}`;
+    activeKeys.add(key);
+    if (!_alertFirstSeen.has(key)) _alertFirstSeen.set(key, new Date());
+    const triggeredAt = _alertFirstSeen.get(key).toISOString();
+
+    if (severity === 'critical') {
+      alerts.push({
+        id: `a-${key}`, severity,
+        title: `${row.QueueName} breach threshold`,
+        desc:  `${row.total} active tasks today, ${row.compliant} file${row.compliant !== 1 ? 's' : ''} complete, ${row.overdue} file${row.overdue !== 1 ? 's' : ''} overdue, SLA at ${pct}%.`,
+        triggeredAt, queueId: row.QueueId,
+      });
+    } else {
+      alerts.push({
+        id: `a-${key}`, severity,
+        title: `${row.QueueName} SLA at risk`,
+        desc:  `${row.total} active tasks today, ${row.compliant} file${row.compliant !== 1 ? 's' : ''} complete, ${row.overdue} file${row.overdue !== 1 ? 's' : ''} overdue, SLA at ${pct}%.`,
+        triggeredAt, queueId: row.QueueId,
+      });
+    }
+  }
+  for (const k of _alertFirstSeen.keys()) {
+    if (!activeKeys.has(k)) _alertFirstSeen.delete(k);
+  }
+  return alerts;
+}
+
+async function fetchAlertsData(customTargets = {}) {
+  const pool    = await connectDB();
+  const NOW_SQL = getNowSql();
+  const { today, todayNext } = computeDates();
+  const alertTargetExpr = buildTargetExpr(customTargets);
+  const result = await pool.request().query(`
+    SELECT
+      CASE ${getTeamIdCase()} END                                                AS teamId,
+      COUNT(*)                                                                AS total,
+      SUM(CASE WHEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 <= ${alertTargetExpr}
+                    AND (t.SLAAdjustedDate IS NULL OR ${NOW_SQL} <= t.SLAAdjustedDate) THEN 1 ELSE 0 END) AS compliant,
+      SUM(CASE WHEN (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${alertTargetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS overdue
+    FROM Tasks t WITH (NOLOCK)
+    LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
+    ${CONFIG_TASKS_JOIN}
+    WHERE t.TaskStatusID IN (1, 4, 5, 6)
+      AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
+      AND ${TEAM_FILTER}
+    GROUP BY CASE ${getTeamIdCase()} END
+  `);
+  const rows = result.recordset.map(r => {
+    const team = getAllTeams().find(t => t.id === r.teamId) || {};
+    return { ...r, QueueId: r.teamId, QueueName: team.name || `Team ${r.teamId}` };
+  });
+  return buildAlerts(rows);
+}
+
 app.get('/api/alerts', async (req, res) => {
-  const buildAlerts = (rows) => {
-    const alerts = [];
-    const activeKeys = new Set();
-    for (const row of rows) {
-      const pct = row.total > 0 ? Math.round((row.compliant / row.total) * 100) : 100;
-      let severity = null;
-      if      (pct < 75) severity = 'critical';
-      else if (pct < 90) severity = 'warning';
-      if (!severity) continue;
-
-      const key = `${row.QueueId}-${severity}`;
-      activeKeys.add(key);
-      if (!_alertFirstSeen.has(key)) _alertFirstSeen.set(key, new Date());
-      const triggeredAt = _alertFirstSeen.get(key).toISOString();
-
-      if (severity === 'critical') {
-        alerts.push({
-          id: `a-${key}`, severity,
-          title: `${row.QueueName} breach threshold`,
-          desc:  `${row.total} active tasks today, ${row.compliant} file${row.compliant !== 1 ? 's' : ''} complete, ${row.overdue} file${row.overdue !== 1 ? 's' : ''} overdue, SLA at ${pct}%.`,
-          triggeredAt, queueId: row.QueueId,
-        });
-      } else {
-        alerts.push({
-          id: `a-${key}`, severity,
-          title: `${row.QueueName} SLA at risk`,
-          desc:  `${row.total} active tasks today, ${row.compliant} file${row.compliant !== 1 ? 's' : ''} complete, ${row.overdue} file${row.overdue !== 1 ? 's' : ''} overdue, SLA at ${pct}%.`,
-          triggeredAt, queueId: row.QueueId,
-        });
-      }
-    }
-    // Prune keys for conditions that have resolved so timestamps reset if they recur
-    for (const k of _alertFirstSeen.keys()) {
-      if (!activeKeys.has(k)) _alertFirstSeen.delete(k);
-    }
-    return alerts;
-  };
-
   if (USE_MOCK) {
     const active = mock.TASKS.filter(t => t.TaskStatusID === 1);
     const rows   = mock.CONFIG_QUEUE.map(q => {
@@ -964,32 +1111,11 @@ app.get('/api/alerts', async (req, res) => {
     return res.json(buildAlerts(rows));
   }
   try {
-    const pool   = await connectDB();
-    const NOW_SQL = getNowSql();
-    const { today, todayNext } = computeDates();
-    const alertTargets = parseTargets(req.query);
-    const alertTargetExpr = buildTargetExpr(alertTargets);
-    const result = await pool.request().query(`
-      SELECT
-        CASE ${getTeamIdCase()} END                                                AS teamId,
-        COUNT(*)                                                                AS total,
-        SUM(CASE WHEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 <= ${alertTargetExpr}
-                      AND (t.SLAAdjustedDate IS NULL OR ${NOW_SQL} <= t.SLAAdjustedDate) THEN 1 ELSE 0 END) AS compliant,
-        SUM(CASE WHEN (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${alertTargetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS overdue
-      FROM Tasks t WITH (NOLOCK)
-      LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      ${CONFIG_TASKS_JOIN}
-      WHERE t.TaskStatusID IN (1, 4, 5, 6)
-        AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
-        AND ${TEAM_FILTER}
-      GROUP BY CASE ${getTeamIdCase()} END
-    `);
-    // Attach team name from TEAMS definition before generating alerts
-    const rows = result.recordset.map(r => {
-      const team = getAllTeams().find(t => t.id === r.teamId) || {};
-      return { ...r, QueueId: r.teamId, QueueName: team.name || `Team ${r.teamId}` };
-    });
-    res.json(buildAlerts(rows));
+    const customTargets = parseTargets(req.query);
+    const hasCustom = Object.keys(customTargets).length > 0;
+    res.json(hasCustom
+      ? await fetchAlertsData(customTargets)
+      : await getCached('alerts', fetchAlertsData));
   } catch (err) {
     sendError(res, 500, 'Internal server error', err);
   }
@@ -1039,12 +1165,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
 
   try {
     const pool = await connectDB();
-    // All teams filter by UsedForKPI/SpecifiedKPIGrp (primary) or fallback DeptId.
-    const primaryFilter = `(ct.UsedForKPI = 1 AND ${teamDef.kpiGrp})`;
-    const fallbackFilter = teamDef.fallbackDeptId
-      ? ` OR (s.DepartmentId = ${teamDef.fallbackDeptId} AND s.EmployeeStatus = 1)`
-      : '';
-    const teamFilter = `(${primaryFilter}${fallbackFilter})`;
+    // Filter for this specific team (Rule 1 KPI group or Rule 2 dept team).
+    const teamFilter = buildTeamFilterFor(teamDef);
 
     const staffJoin = `LEFT JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
       LEFT JOIN ConfigTasks ct WITH (NOLOCK) ON t.ConfigTaskId = ct.ConfigTaskId
@@ -1128,45 +1250,49 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
 // Returns count + total LoanAmount for 3 milestones: received, funder approved, settled.
 // Each bucket queries its own date column so each scan is range-limited and sargable.
 // Returns: { received, approved, settled } � each: { count, amount, deltas: { count, amount } }
+async function fetchLoanSummary() {
+  const pool = await connectDB();
+  const { today, prev, todayNext, prevNext } = computeDates();
+
+  const loanQuery = (col) => pool.request().query(`
+    SELECT
+      SUM(CASE WHEN ${col} >= '${today}' AND ${col} < '${todayNext}' THEN 1 ELSE 0 END)                                                          AS todayCount,
+      ISNULL(SUM(CASE WHEN ${col} >= '${today}' AND ${col} < '${todayNext}' THEN ISNULL(LoanAmount, 0) ELSE 0 END), 0)                           AS todayAmt,
+      SUM(CASE WHEN ${col} >= '${prev}'  AND ${col} < '${prevNext}'  THEN 1 ELSE 0 END)                                                          AS prevCount,
+      ISNULL(SUM(CASE WHEN ${col} >= '${prev}'  AND ${col} < '${prevNext}'  THEN ISNULL(LoanAmount, 0) ELSE 0 END), 0)                           AS prevAmt
+    FROM Loans WITH (NOLOCK)
+    WHERE ${col} >= '${prev}' AND ${col} < '${todayNext}'
+  `);
+
+  const [recv, appr, sett] = await Promise.all([
+    loanQuery('Date_ApplicationReceived'),
+    loanQuery('Date_FunderApproval'),
+    loanQuery('Date_Settled'),
+  ]);
+
+  const parse = (result) => {
+    const r = result.recordset[0] || {};
+    const todayCount = r.todayCount || 0;
+    const todayAmt   = Math.round(parseFloat(r.todayAmt) || 0);
+    const prevCount  = r.prevCount  || 0;
+    const prevAmt    = Math.round(parseFloat(r.prevAmt)  || 0);
+    return {
+      count:  todayCount,
+      amount: todayAmt,
+      deltas: { count: todayCount - prevCount, amount: todayAmt - prevAmt },
+    };
+  };
+
+  return {
+    received: parse(recv),
+    approved: parse(appr),
+    settled:  parse(sett),
+  };
+}
+
 app.get('/api/loan-summary', async (req, res) => {
   try {
-    const pool = await connectDB();
-    const { today, prev, todayNext, prevNext } = computeDates();
-
-    const loanQuery = (col) => pool.request().query(`
-      SELECT
-        SUM(CASE WHEN ${col} >= '${today}' AND ${col} < '${todayNext}' THEN 1 ELSE 0 END)                                                          AS todayCount,
-        ISNULL(SUM(CASE WHEN ${col} >= '${today}' AND ${col} < '${todayNext}' THEN ISNULL(LoanAmount, 0) ELSE 0 END), 0)                           AS todayAmt,
-        SUM(CASE WHEN ${col} >= '${prev}'  AND ${col} < '${prevNext}'  THEN 1 ELSE 0 END)                                                          AS prevCount,
-        ISNULL(SUM(CASE WHEN ${col} >= '${prev}'  AND ${col} < '${prevNext}'  THEN ISNULL(LoanAmount, 0) ELSE 0 END), 0)                           AS prevAmt
-      FROM Loans WITH (NOLOCK)
-      WHERE ${col} >= '${prev}' AND ${col} < '${todayNext}'
-    `);
-
-    const [recv, appr, sett] = await Promise.all([
-      loanQuery('Date_ApplicationReceived'),
-      loanQuery('Date_FunderApproval'),
-      loanQuery('Date_Settled'),
-    ]);
-
-    const parse = (result) => {
-      const r = result.recordset[0] || {};
-      const todayCount = r.todayCount || 0;
-      const todayAmt   = Math.round(parseFloat(r.todayAmt) || 0);
-      const prevCount  = r.prevCount  || 0;
-      const prevAmt    = Math.round(parseFloat(r.prevAmt)  || 0);
-      return {
-        count:  todayCount,
-        amount: todayAmt,
-        deltas: { count: todayCount - prevCount, amount: todayAmt - prevAmt },
-      };
-    };
-
-    res.json({
-      received: parse(recv),
-      approved: parse(appr),
-      settled:  parse(sett),
-    });
+    res.json(await getCached('loans', fetchLoanSummary));
   } catch (err) {
     sendError(res, 500, 'Internal server error', err);
   }
@@ -1543,6 +1669,7 @@ app.get('/api/staff/department/:departmentId', async (req, res) => {
 });
 
 // --- Protect all data endpoints with JWT -------------------------------------
+app.use('/api/settings',     requireAuth);
 app.use('/api/kpi-summary',   requireAuth);
 app.use('/api/teams',         requireAuth);
 app.use('/api/tasks',         requireAuth);
@@ -1551,6 +1678,81 @@ app.use('/api/alerts',        requireAuth);
 app.use('/api/alert-tasks',   requireAuth);
 app.use('/api/loan-summary',  requireAuth);
 app.use('/api/loan-detail',   requireAuth);
+
+// --- Global settings endpoints -----------------------------------------------
+// GET /api/settings — returns the global admin-configured dashboard settings.
+// All authenticated users call this on login and auto-refresh so non-admin users
+// pick up admin changes within the current refresh interval.
+app.get('/api/settings', async (req, res) => {
+  try {
+    const pool   = await connectDB();
+    const result = await pool.request().query(
+      `SELECT SettingValue FROM DashboardGlobalSettings WHERE SettingKey = 'global'`
+    );
+    if (!result.recordset.length) return res.json({});
+    res.json(JSON.parse(result.recordset[0].SettingValue || '{}'));
+  } catch (err) {
+    sendError(res, 500, 'Failed to fetch settings', err);
+  }
+});
+
+// PUT /api/admin/settings — admin saves global dashboard settings.
+// Stored as a single JSON blob; overwrites the previous value atomically.
+app.put('/api/admin/settings', requireAdmin, express.json(), async (req, res) => {
+  try {
+    const pool  = await connectDB();
+    const value = JSON.stringify(req.body || {});
+    await pool.request()
+      .input('val', sql.NVarChar(sql.MAX), value)
+      .query(`
+        IF EXISTS (SELECT 1 FROM DashboardGlobalSettings WHERE SettingKey = 'global')
+          UPDATE DashboardGlobalSettings
+             SET SettingValue = @val, UpdatedAt = GETDATE()
+           WHERE SettingKey = 'global'
+        ELSE
+          INSERT INTO DashboardGlobalSettings (SettingKey, SettingValue)
+          VALUES ('global', @val)
+      `);
+    res.json({ message: 'Settings saved.' });
+  } catch (err) {
+    sendError(res, 500, 'Failed to save settings', err);
+  }
+});
+
+// --- Task Codes List ----------------------------------------------------------
+// GET /api/task-codes — all ConfigTasks rows with dept info (admin only, no cache).
+// No-cache so that UsedForKPI / SpecifiedKPIGrp edits surface immediately.
+app.get('/api/task-codes', requireAuth, async (req, res) => {
+  if (req.user?.role !== 'admin') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  try {
+    const pool = await connectDB();
+    const result = await pool.request().query(`
+      SELECT DISTINCT
+        f.ConfigTaskId,
+        f.TaskCode,
+        cf.FunctionID,
+        cf.FunctionName,
+        f.TaskName,
+        f.Inactive,
+        f.SLA,
+        b.DepartmentId,
+        b.Name        AS DepartmentName,
+        f.UsedForKPI,
+        LTRIM(RTRIM(ISNULL(f.SpecifiedKPIGrp, ''))) AS SpecifiedKPIGrp
+      FROM ConfigTasks f WITH (NOLOCK)
+      LEFT JOIN Tasks          c  WITH (NOLOCK) ON c.ConfigTaskId = f.ConfigTaskId
+      LEFT JOIN Staff          a  WITH (NOLOCK) ON a.StaffID = c.AssignedTo
+      LEFT JOIN Department     b  WITH (NOLOCK) ON b.DepartmentId = a.DepartmentId
+      LEFT JOIN ConfigFunction cf WITH (NOLOCK) ON cf.FunctionID = f.FunctionID
+      ORDER BY f.TaskCode
+    `);
+    res.json(result.recordset);
+  } catch (err) {
+    sendError(res, 500, 'Internal server error', err);
+  }
+});
 
 // --- Start server -------------------------------------------------------------
 const PORT = process.env.PORT || 5000;
@@ -1570,6 +1772,18 @@ app.listen(PORT, async () => {
           RAISERROR('DashboardAccess table not found. Run sql/create_new_auth_tables.sql first.', 16, 1);
       `);
       console.log('[startup] auth tables verified (ConfigReportUsers, ConfigDashboards, DashboardAccess).');
+
+      // Auto-create DashboardGlobalSettings table for admin-managed global config.
+      // Stores all settings as a single JSON blob under key 'global'.
+      await pool.request().query(`
+        IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'DashboardGlobalSettings')
+          CREATE TABLE DashboardGlobalSettings (
+            SettingKey   NVARCHAR(100) NOT NULL PRIMARY KEY,
+            SettingValue NVARCHAR(MAX) NULL,
+            UpdatedAt    DATETIME      DEFAULT GETDATE()
+          )
+      `);
+      console.log('[startup] DashboardGlobalSettings table ready.');
 
       // ── Step 1: Seed ConfigDashboards if empty — capture the real generated ID ─
       let seedDashId = SLA_DASHBOARD_ID;
@@ -1663,28 +1877,34 @@ app.listen(PORT, async () => {
       await resolveEffectiveDate();
       setInterval(resolveEffectiveDate, 60 * 60 * 1000);
 
-      // Discover dynamic KPI groups before first cache warm so team cards include them.
-      // Also runs every 60 s independently so new ConfigTasks entries appear within ~1 min
-      // without requiring a backend restart or waiting for the 5-min teams cache to expire.
-      await refreshDynamicGroups().catch(err =>
-        console.warn('[startup] dynamic groups discovery failed (non-fatal):', err.message)
+      // Discover teams (KPI groups + dept fallbacks) before first cache warm.
+      // Also runs every 60 s so new ConfigTasks / Staff.Department changes surface
+      // within ~1 min without a restart or waiting for the 5-min teams cache to expire.
+      await refreshTeams().catch(err =>
+        console.warn('[startup] team discovery failed (non-fatal):', err.message)
       );
       setInterval(
-        () => refreshDynamicGroups().catch(err => console.warn('[dynamic teams] interval refresh failed:', err.message)),
+        () => refreshTeams().catch(err => console.warn('[teams] interval refresh failed:', err.message)),
         60 * 1000
       );
 
-      // History (90-day scan) is intentionally excluded from startup warmup.
-      // It is expensive on cold start and can exhaust the connection pool.
-      // It will be warmed on the first real request to /api/history.
+      // Warm every cached endpoint on startup so the first user request is hot,
+      // even after a full SQL Server restart. Sequential (not concurrent) to avoid
+      // saturating the SQL pool with several long cold-disk scans at once.
+      // History uses a range-keyed cache; warming the 90d variant also warms
+      // shorter ranges via SQL Server's buffer pool.
       const warmups = [
-        ['kpi',   fetchKpiData],
-        ['teams', fetchTeamsData],
+        ['kpi',         () => fetchKpiData()],
+        ['teams',       () => fetchTeamsData()],
+        ['loans',       () => fetchLoanSummary()],
+        ['alerts',      () => fetchAlertsData()],
+        ['history:90d', () => fetchHistoryData('90d')],
       ];
       for (const [key, fn] of warmups) {
         try {
           console.log(`[cache] warming ${key}...`);
           await fn().then(data => {
+            if (!_cache[key]) _cache[key] = { data: null, ts: 0, pending: null };
             _cache[key].data = data;
             _cache[key].ts   = Date.now();
             console.log(`[cache] ${key} ready`);

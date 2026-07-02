@@ -5,7 +5,7 @@ import { AlertsPanel, InfoTip } from './components.jsx';
 import { fmtHMS } from './utils.js';
 import { TEAM_COLORS, slaClass, slaLabel, TOOLTIPS } from '../constants.js';
 import { activeTeams } from '../chartUtils.js';
-import { getAdminUsers, deleteAdminUser, getStaffDepartments, getStaffAbsentToday, getStaffByDepartment } from '../api.js';
+import { getAdminUsers, deleteAdminUser, getStaffDepartments, getStaffAbsentToday, getStaffByDepartment, getTaskCodes } from '../api.js';
 
 // Additional views for sidebar nav routing
 
@@ -460,6 +460,7 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
   const makeDraft = (s) => ({
     targets:        { ...s.targets },
     teamOrder:      Array.isArray(s.groupOrder) ? [...s.groupOrder] : [],
+    hiddenTeams:    Array.isArray(s.hiddenTeams) ? [...s.hiddenTeams] : [],
     refreshMin:     s.refreshMin,
     atRiskPct:      s.atRiskPct,
     modalTaskCount: s.modalTaskCount,
@@ -485,14 +486,26 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
   const setLoanTarget = (key, val) =>
     setDraft(d => ({ ...d, loanTargets: { ...d.loanTargets, [key]: val } }));
 
-  // Ordered team list for the drag-and-drop section (derived from draft.teamOrder)
+  const removeTeam = (id) =>
+    setDraft(d => ({
+      ...d,
+      hiddenTeams: [...(d.hiddenTeams || []), id],
+      teamOrder:   (d.teamOrder || []).filter(tid => tid !== id),
+    }));
+
+  const restoreTeam = (id) =>
+    setDraft(d => ({ ...d, hiddenTeams: (d.hiddenTeams || []).filter(tid => tid !== id) }));
+
+  // Ordered team list for the drag-and-drop section (hidden teams excluded)
   const orderedDraftTeams = React.useMemo(() => {
-    if (!draft.teamOrder || draft.teamOrder.length === 0) return teams;
-    const teamMap = new Map(teams.map(t => [t.id, t]));
+    const hidden = new Set(draft.hiddenTeams || []);
+    const visible = teams.filter(t => !hidden.has(t.id));
+    if (!draft.teamOrder || draft.teamOrder.length === 0) return visible;
+    const teamMap = new Map(visible.map(t => [t.id, t]));
     const ordered   = draft.teamOrder.filter(id => teamMap.has(id)).map(id => teamMap.get(id));
-    const remaining = teams.filter(t => !draft.teamOrder.includes(t.id));
+    const remaining = visible.filter(t => !draft.teamOrder.includes(t.id));
     return [...ordered, ...remaining];
-  }, [teams, draft.teamOrder]);
+  }, [teams, draft.teamOrder, draft.hiddenTeams]);
 
   // Drag-and-drop state
   const dragIdRef                       = React.useRef(null);
@@ -545,15 +558,16 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
     return null;
   };
 
-  const handleApply = () => {
+  const handleApply = async () => {
     const err = validate(draft);
     if (err) { setErrorMsg(err); setApplyStatus('error'); return; }
     setApplyStatus('saving');
     setErrorMsg('');
     try {
-      onApply({
+      await onApply({
         targets:        draft.targets,
         groupOrder:     draft.teamOrder,
+        hiddenTeams:    draft.hiddenTeams,
         refreshMin:     Number(draft.refreshMin),
         atRiskPct:      Number(draft.atRiskPct),
         modalTaskCount: Number(draft.modalTaskCount),
@@ -645,16 +659,52 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
                   <div style={{fontSize:10,color:'var(--ink-muted)',letterSpacing:'0.06em',textTransform:'uppercase'}}>{t.dept}</div>
                 </div>
               </div>
-              <div className="setting-input">
-                <input type="number" min="0.5" max="168" step="0.5"
-                  value={draft.targets[t.id] ?? t.target}
-                  onChange={e => setTarget(t.id, +e.target.value)}/>
-                <span className="setting-unit">hours</span>
+              <div style={{display:'flex',alignItems:'center',gap:8}}>
+                <div className="setting-input">
+                  <input type="number" min="0.5" max="168" step="0.5"
+                    value={draft.targets[t.id] ?? t.target}
+                    onChange={e => setTarget(t.id, +e.target.value)}/>
+                  <span className="setting-unit">hours</span>
+                </div>
+                <button
+                  onClick={() => removeTeam(t.id)}
+                  title={`Hide ${t.name} from all dashboard views`}
+                  style={{padding:'4px 10px',background:'transparent',border:'1px solid var(--bad)',borderRadius:6,fontSize:11,fontWeight:700,cursor:'pointer',color:'var(--bad)',flexShrink:0,letterSpacing:'0.04em'}}
+                >REMOVE</button>
               </div>
             </div>
           ))}
         </div>
       </section>
+
+      {/* Hidden teams restore section — only shown when at least one team is hidden */}
+      {(draft.hiddenTeams || []).length > 0 && (
+        <section className="trend-card" style={{padding:'22px 26px'}}>
+          <h2 className="section-title" style={{marginBottom:4}}>Hidden Teams</h2>
+          <div className="section-sub" style={{marginBottom:18}}>These teams are hidden across all dashboard views. Click Restore to show them again.</div>
+          <div className="settings-grid">
+            {(draft.hiddenTeams || []).map(id => {
+              const t = teams.find(t => t.id === id);
+              if (!t) return null;
+              return (
+                <div key={id} className="setting-row">
+                  <div className="setting-meta">
+                    <span style={{width:8,height:24,borderRadius:2,background:TEAM_COLORS[t.name],opacity:0.4}}/>
+                    <div>
+                      <div style={{fontWeight:600,fontSize:14,color:'var(--ink-muted)',textDecoration:'line-through'}}>{t.name}</div>
+                      <div style={{fontSize:10,color:'var(--ink-muted)',letterSpacing:'0.06em',textTransform:'uppercase'}}>{t.dept}</div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => restoreTeam(id)}
+                    style={{padding:'4px 12px',background:'var(--surface-2)',border:'1px solid var(--line)',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer',color:'var(--ink)',flexShrink:0}}
+                  >Restore</button>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <section className="trend-card" style={{padding:'22px 26px'}}>
         <h2 className="section-title" style={{marginBottom:4}}>Refresh & Thresholds</h2>
@@ -727,7 +777,7 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
   );
 };
 
-export { TeamsView, TasksView, ReportsView, AlertsView, SettingsView, StaffListView, AdminView };
+export { TeamsView, TasksView, ReportsView, AlertsView, SettingsView, StaffListView, AdminView, TaskCodesView };
 
 // ===== STAFF LIST VIEW — department staff counts with drill-through =====
 function StaffListView() {
@@ -993,6 +1043,154 @@ function StaffListView() {
             )}
           </div>
         </div>
+      )}
+    </main>
+  );
+}
+
+// ===== TASK CODES VIEW — ConfigTasks list with filters (admin only) =====
+function TaskCodesView() {
+  const [rows, setRows]       = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError]     = React.useState('');
+
+  const [fCode,     setFCode]     = React.useState('');
+  const [fName,     setFName]     = React.useState('');
+  const [fInactive, setFInactive] = React.useState('');
+  const [fDept,     setFDept]     = React.useState('');
+  const [fKpi,      setFKpi]      = React.useState('');
+  const [fGrp,      setFGrp]      = React.useState('');
+
+  const load = React.useCallback(() => {
+    setLoading(true);
+    setError('');
+    getTaskCodes()
+      .then(data => { setRows(data); setLoading(false); })
+      .catch(err  => { setError(err.message); setLoading(false); });
+  }, []);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const filtered = React.useMemo(() => {
+    const lc = s => (s || '').toLowerCase();
+    const qCode     = fCode.trim().toLowerCase();
+    const qName     = fName.trim().toLowerCase();
+    const qDept     = fDept.trim().toLowerCase();
+    const qGrp      = fGrp.trim().toLowerCase();
+    return rows.filter(r => {
+      if (qCode && !lc(r.TaskCode).includes(qCode)) return false;
+      if (qName && !lc(r.TaskName).includes(qName)) return false;
+      if (fInactive !== '' && String(r.Inactive ? '1' : '0') !== fInactive) return false;
+      if (qDept && !lc(r.DepartmentName).includes(qDept)) return false;
+      if (fKpi !== '' && String(r.UsedForKPI === null ? '' : r.UsedForKPI ? '1' : '0') !== fKpi) return false;
+      if (qGrp && !lc(r.SpecifiedKPIGrp).includes(qGrp)) return false;
+      return true;
+    });
+  }, [rows, fCode, fName, fInactive, fDept, fKpi, fGrp]);
+
+  const inputStyle = { padding: '7px 12px', fontSize: 13, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--ink)', outline: 'none' };
+  const selectStyle = { ...inputStyle, cursor: 'pointer' };
+
+  return (
+    <main className="content">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Task Codes List</h1>
+          <div className="page-sub">
+            {loading ? 'Loading…' : error ? 'Unable to load task codes' : `${filtered.length} of ${rows.length} task codes`}
+          </div>
+        </div>
+      </div>
+
+      {loading && (
+        <div className="trend-card" style={{ padding: '48px 24px', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+          Loading task codes…
+        </div>
+      )}
+
+      {!loading && error && (
+        <div className="trend-card" style={{ padding: '32px 24px', textAlign: 'center' }}>
+          <div style={{ color: 'var(--bad)', fontWeight: 600, marginBottom: 8 }}>Failed to load</div>
+          <div style={{ color: 'var(--ink-muted)', fontSize: 13 }}>{error}</div>
+        </div>
+      )}
+
+      {!loading && !error && (
+        <>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, margin: '0 0 12px' }}>
+            <input type="text" placeholder="Task Code" value={fCode} onChange={e => setFCode(e.target.value)} style={{ ...inputStyle, width: 130 }}/>
+            <input type="text" placeholder="Task Name" value={fName} onChange={e => setFName(e.target.value)} style={{ ...inputStyle, width: 200 }}/>
+            <select value={fInactive} onChange={e => setFInactive(e.target.value)} style={{ ...selectStyle, width: 130 }}>
+              <option value="">Inactive: All</option>
+              <option value="0">Active only</option>
+              <option value="1">Inactive only</option>
+            </select>
+            <input type="text" placeholder="Department Name" value={fDept} onChange={e => setFDept(e.target.value)} style={{ ...inputStyle, width: 180 }}/>
+            <select value={fKpi} onChange={e => setFKpi(e.target.value)} style={{ ...selectStyle, width: 150 }}>
+              <option value="">UsedForKPI: All</option>
+              <option value="1">UsedForKPI = 1</option>
+              <option value="0">UsedForKPI = 0</option>
+              <option value="">— null —</option>
+            </select>
+            <input type="text" placeholder="SpecifiedKPIGrp" value={fGrp} onChange={e => setFGrp(e.target.value)} style={{ ...inputStyle, width: 180 }}/>
+            <button className="btn-secondary" onClick={load}>Refresh</button>
+          </div>
+
+          <section className="trend-card" style={{ padding: '22px 26px' }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
+                {rows.length === 0 ? 'No task codes found' : 'No task codes match your filters'}
+              </div>
+            ) : (
+              <table className="teams-table">
+                <thead>
+                  <tr>
+                    <th>ConfigTaskId</th>
+                    <th>TaskCode</th>
+                    <th>FunctionID</th>
+                    <th>FunctionName</th>
+                    <th>TaskName</th>
+                    <th style={{ textAlign: 'center' }}>Inactive</th>
+                    <th style={{ textAlign: 'right' }}>SLA</th>
+                    <th>DeptId</th>
+                    <th>DepartmentName</th>
+                    <th style={{ textAlign: 'center' }}>UsedForKPI</th>
+                    <th>SpecifiedKPIGrp</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((r, i) => (
+                    <tr key={`${r.ConfigTaskId}-${i}`}>
+                      <td><span className="soft">{r.ConfigTaskId}</span></td>
+                      <td><strong>{r.TaskCode || '—'}</strong></td>
+                      <td><span className="soft">{r.FunctionID ?? '—'}</span></td>
+                      <td>{r.FunctionName || '—'}</td>
+                      <td>{r.TaskName || '—'}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        {r.Inactive
+                          ? <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: 'color-mix(in srgb, var(--bad) 15%, transparent)', color: 'var(--bad)' }}>Yes</span>
+                          : <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: 'color-mix(in srgb, var(--ok) 15%, transparent)', color: 'var(--ok)' }}>No</span>
+                        }
+                      </td>
+                      <td style={{ textAlign: 'right' }}>{r.SLA ?? '—'}</td>
+                      <td><span className="soft">{r.DepartmentId ?? '—'}</span></td>
+                      <td>{r.DepartmentName || '—'}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        {r.UsedForKPI === null
+                          ? <span className="soft">—</span>
+                          : r.UsedForKPI
+                            ? <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 10, background: 'color-mix(in srgb, var(--ok) 15%, transparent)', color: 'var(--ok)' }}>1</span>
+                            : <span className="soft">0</span>
+                        }
+                      </td>
+                      <td>{r.SpecifiedKPIGrp || <span className="soft">—</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </section>
+        </>
       )}
     </main>
   );

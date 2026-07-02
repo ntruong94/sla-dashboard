@@ -601,7 +601,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .alert:last-child { border-bottom: none; }
 .alert-main {
   display: grid;
-  grid-template-columns: 28px 1fr auto;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   gap: 12px;
   padding: 14px 18px;
   align-items: flex-start;
@@ -928,6 +928,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   box-shadow: 0 4px 18px rgba(0,0,0,0.28);
   pointer-events: none;
   white-space: pre-line;
+  overflow-wrap: break-word;
   width: 240px;
   z-index: 9999;
   text-transform: none;

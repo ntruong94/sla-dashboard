@@ -57,6 +57,7 @@ export const Icon = ({ name, size = 16 }) => {
     case 'grid': return <svg {...p}><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></svg>;
     case 'user-shield': return <svg {...p}><path d="M12 2l7 3v5c0 4.5-3 8-7 9-4-1-7-4.5-7-9V5l7-3z"/><circle cx="12" cy="10" r="2.5"/><path d="M8.5 17c.5-2 2-3 3.5-3s3 1 3.5 3"/></svg>;
     case 'staff-list': return <svg {...p}><circle cx="7" cy="7.5" r="3"/><path d="M1.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5"/><line x1="15" y1="7" x2="22" y2="7"/><line x1="15" y1="11" x2="22" y2="11"/><line x1="15" y1="15" x2="20" y2="15"/></svg>;
+    case 'task-codes': return <svg {...p}><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="7" y1="8" x2="17" y2="8"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="7" y1="16" x2="13" y2="16"/><circle cx="19" cy="16" r="2.5" fill="currentColor" stroke="none"/></svg>;
     default: return null;
   }
 };

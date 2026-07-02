@@ -52,139 +52,95 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 | Settings | `/settings` | Per-team SLA target configuration |
 | User Management | `/admin` | **Admin only** — read-only list of registered users (email, role, joined, status) |
 | Staff List | `/staff-list` | All departments with active staff counts; click row to drill into staff members |
+| Task Codes List | `/task-codes` | **Admin only** — ConfigTasks table with dept/KPI group info; free-text filters; always-fresh data (no cache) |
 ---
 
 ## 5. KPIs / SLA Metrics
 
-> **Updated 2026-06-02:** KPI and Team card calculations aligned to the Work Scope spec (SLA_Dashboard_Work_Scope.docx). Each metric uses a different status filter — see table below. All values are scoped to **`DateCreated = today`** (sargable range pattern).
+### Task status codes
+| Status | Meaning |
+|--------|---------|
+| `1, 4, 5, 6` | Active / open (In Progress, On Hold, On Queue, Not Queued) |
+| `2` | Completed |
 
-| KPI | Description | Status filter | SQL logic |
-|-----|-------------|---------------|-----------|
-| Total Active Tasks | Count of open tasks created **today** | `IN (1,4,5,6)` active only | `SUM(... AND TaskStatusID IN (1,4,5,6))` |
-| Overall SLA % | `((tasks completed within target) OR (tasks completed by SLAAdjustedDate) ÷ total tasks completed) × 100` — **DateCompleted** basis | `= 2` completed only | `SUM(CASE WHEN (DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0 <= targetExpr OR (SLAAdjustedDate IS NOT NULL AND DateCompleted <= SLAAdjustedDate)) THEN 1 ELSE 0 END) / NULLIF(SUM(1), 0) * 100` scoped to `DateCompleted = today` |
-| Avg Turnaround (TAT) | Mean elapsed time across all tasks created today | all (1,2,4,5,6) | Open tasks: `AVG(DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0)` · Closed tasks: `AVG(DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0)` |
-| Overdue / Breached | Count of **open** tasks created today that are overdue | `IN (1,4,5,6)` active only | `SUM(... AND DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0 > targetExpr)` |
-| Per-Team Volume | Active task count per team, scoped to `DateCreated = today` | `IN (1,4,5,6)` active only | `/api/teams` query 1, grouped by DepartmentId CASE |
-| Per-Team SLA % | `((completed within target) OR (completed by SLAAdjustedDate)) ÷ total completed × 100` per team — **DateCompleted** basis | `= 2` completed only | separate SLA query (Q3 in `fetchTeamsData`) using `(DATEDIFF(DateCreated, DateCompleted) / 60.0 <= targetExpr OR (SLAAdjustedDate IS NOT NULL AND DateCompleted <= SLAAdjustedDate))`, grouped by TEAM_ID_CASE, scoped to `DateCompleted = today` |
-| Per-Team Avg TAT | Mean elapsed time per team, all tasks today | all (1,2,4,5,6) | Same mixed CASE: `WHEN active THEN DATEDIFF(DateCreated, GETDATE()) ELSE DATEDIFF(DateCreated, DateCompleted)` |
-| Per-Team Overdue | Open tasks past SLA target per team, today | `IN (1,4,5,6)` active only | same query 1 |
+### Date scoping
+- All metrics are scoped to **today** using a sargable range: `col >= 'YYYY-MM-DD' AND col < 'next-day'`.
+- **Active-task metrics** (volume, overdue, TAT) scope by `DateCreated`.
+- **SLA %** scopes by `DateCompleted` — it measures completed work, not created work.
+- **Deltas** ("vs yesterday") use the same column and status filter as the main value, but for the previous business day.
+- TAT is always real-time DATEDIFF, never the stored `TotalHoursOnTask` column.
 
-> **TAT Rule (2026-06-12 — updated from stored field to real-time computed):**
-> - **Open (active) tasks:** TAT = `DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0` — elapsed calendar hours from task creation to now.
-> - **Closed (completed) tasks:** TAT = `DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0` — elapsed calendar hours from creation to completion.
->
-> The `TotalHoursOnTask` stored column is **no longer used** for any TAT, overdue, or at-risk calculation (it was NULL for ~98% of active tasks). All calculations now use the DATEDIFF formula.
+### The 4 summary KPI cards
+These cards aggregate **only over teams currently shown in Team Performance** (hidden teams are excluded).
 
-> **Overdue Rule (2026-06-18 — updated):** A task is overdue when:
-> Real-time TAT (`DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0`) exceeds the team's configured SLA target hours.
->
-> SQL condition (active tasks only):
-> ```sql
-> DATEDIFF(MINUTE, t.DateCreated, GETDATE()) / 60.0 > ${targetExpr}
-> ```
-> The previous Rule 2 (`SLAAdjustedDate IS NOT NULL AND GETDATE() > SLAAdjustedDate`) has been **REMOVED**. `SLAAdjustedDate` is no longer used for active-task overdue determination — overdue is purely target-driven and reacts directly to the SLA target configured in the Settings tab.
->
-> Applied to: KPI overdue count, KPI prev-day delta, team card overdue count, team card delta, tasks view `status='bad'` filter and CASE, alerts query `overdue` count, alert-tasks drill-down overdue UNION branch.
-> Note: closed-task SLA% rules (Overall SLA % KPI, per-team SLA %, history chart) still use the `SLAAdjustedDate` fallback against `DateCompleted` — that is a separate compliance metric and is unaffected by this change.
+| Card | What it counts | Status filter |
+|------|---------------|---------------|
+| Total Active Tasks | Open tasks with `DateCreated = today` | `IN (1,4,5,6)` |
+| Overall SLA % | Completed tasks where TAT ≤ target **or** `DateCompleted ≤ SLAAdjustedDate`, divided by all completed tasks today | `= 2`, scoped by `DateCompleted` |
+| Avg Turnaround | Mean elapsed hours — open tasks use `GETDATE() − DateCreated`; closed tasks use `DateCompleted − DateCreated` | all statuses |
+| Overdue / Breached | Open tasks where elapsed hours > configured SLA target | `IN (1,4,5,6)` |
 
-> **At Risk Rule (2026-06-12):** A task is at risk if:
-> - Real-time TAT >= `atRiskFraction × SLA target` AND TAT <= SLA target AND SLAAdjustedDate has not passed.
-> - Default `atRiskFraction` = 87.5% (configurable in Settings). Applied in `/api/alert-tasks` and `/api/tasks` status CASE.
-> - SQL: `DATEDIFF(MINUTE, t.DateCreated, GETDATE()) / 60.0 >= ${slaExpr} * ${atRiskFraction} AND DATEDIFF(MINUTE, t.DateCreated, GETDATE()) / 60.0 <= ${slaExpr}`
+**How scoping works:** The frontend calls `/api/teams`, filters out hidden teams, then passes `?visibleTeams=<ids>` to `/api/kpi-summary`. The backend's `buildKpiScopeFilter(teamIds)` builds an OR-filter for exactly those teams. The global cache is bypassed whenever `visibleTeams` is present.
 
+### Per-team card metrics
+Each team card shows the same four metrics, but scoped to that team only:
 
-> **Date scope (SLA % only):** `DateCompleted >= 'YYYY-MM-DD' AND DateCompleted < 'next-day'` — uses `DateCompleted`, not `DateCreated`. See SLA% Rule below.
-> **Delta scope:** today value − prev biz day value. Same per-metric date columns and status filters.
-> **Team scope filter (all metrics):** `(ct.UsedForKPI = 1 AND ct.SpecifiedKPIGrp non-empty) OR (ct.UsedForKPI IS NULL AND ct.SpecifiedKPIGrp IS NULL AND s.DepartmentId IN (101, 110, 122) AND s.EmployeeStatus = 1)` — `TEAM_FILTER` constant. Rule 1 branch: KPI-flagged tasks with a non-empty `SpecifiedKPIGrp`. Rule 2 branch: fully-unclassified tasks assigned to a fallback-dept team's active staff (ids 1, 2, 4). All queries use `LEFT JOIN Staff s ON t.AssignedTo = s.StaffID` and `LEFT JOIN ConfigTasks ct ON t.ConfigTaskId = ct.ConfigTaskId`.
+| Metric | Status filter | Notes |
+|--------|--------------|-------|
+| Volume | `IN (1,4,5,6)` | Active tasks created today |
+| SLA % | `= 2`, `DateCompleted` scope | Same OR-rule as Overall SLA % |
+| Avg TAT | all statuses | Mixed DATEDIFF formula |
+| Overdue | `IN (1,4,5,6)` | Elapsed hours > team's configured target |
 
-> **SLA% Rule (2026-06-17 — updated):** All SLA% figures (Overall KPI, per-team cards, history chart) use `DateCompleted` for date scoping and count a completed task as compliant when **either** condition is true:
-> 1. `DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0 <= targetExpr`
-> 2. `SLAAdjustedDate IS NOT NULL AND DateCompleted <= SLAAdjustedDate`
->
-> The numerator uses one CASE expression with `OR`, so any qualifying completed task is counted **once** (no double counting).
-> ```sql
-> CAST(
->   SUM(CASE WHEN t.TaskStatusID = 2
->            AND (
->              DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= targetExpr
->              OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
->            )
->            THEN 1 ELSE 0 END) AS FLOAT
-> ) / NULLIF(SUM(CASE WHEN t.TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100
-> ```
-> Filtered by `t.DateCompleted >= 'YYYY-MM-DD' AND t.DateCompleted < 'next-day'`.
-> `fetchKpiData()` runs this as a separate parallel query (Q2). `fetchTeamsData()` runs it as Q3. `fetchHistoryData()` also uses computed DATEDIFF TAT.
+### Task classification rules
+- **Overdue:** `DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0 > targetExpr`
+- **At Risk:** elapsed hours ≥ `atRiskFraction × target` AND ≤ target (default `atRiskFraction` = 87.5 %, configurable in Settings)
+- **SLA % compliance:** a completed task counts as compliant when `(TAT ≤ target) OR (DateCompleted ≤ SLAAdjustedDate)`
 
 ---
 
 ## 6. Dashboard Teams
 
-The dashboard maps **8 defined teams** identified via `ConfigTasks.UsedForKPI = 1` and `ConfigTasks.SpecifiedKPIGrp` LIKE patterns, plus optional **dynamic teams** auto-discovered from the database.
+Teams are **discovered dynamically** — there is no hardcoded team list. `refreshTeams()` runs at startup and every 60 seconds to rebuild the list from the database.
 
-| id | Dashboard Name | Department | SLA Target | kpiGrp pattern | Fallback Department |
-|----|---------------|------------|------------|----------------|---------------------|
-| 1 | Data Entry | Origination | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Data%Entry%'` | `fallbackDeptId=101` |
-| 2 | Valuations | Origination | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Valuation%'` | `fallbackDeptId=110` |
-| 3 | Assessments | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Assessment%'` | *no fallback — KPI-tagged tasks exist in DB* |
-| 4 | Packaging & QA | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Packaging%' OR ct.SpecifiedKPIGrp LIKE N'%QA%'` | `fallbackDeptId=122` |
-| 5 | CLA | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%CLA%'` | *no fallback — KPI-tagged tasks exist in DB* |
-| 6 | Funder Submission | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Funder%Submission%'` | *no fallback — KPI-tagged tasks exist in DB* |
-| 7 | Funder MIR | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Funder%MIR%'` | *no fallback — KPI-tagged tasks exist in DB* |
-| 8 | Settlement | Settlement | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Settlement%'` | *no fallback — KPI-tagged tasks exist in DB* |
+### Grouping rules (Rule 1 takes precedence)
 
-> **UPDATED 2026-06-25** — Refactored from 8 teams (DepartmentId/REPORT_Loans_Extension) to 9 teams using `ConfigTasks.UsedForKPI`/`SpecifiedKPIGrp`.
-> **UPDATED 2026-06-30** — Two-tier classification: kpiGrp-primary WHENs now fire **first** (explicit SpecifiedKPIGrp match wins); DeptId-primary WHENs are the fallback for unclassified tasks.
-> **UPDATED 2026-07-01** — Fallback `DepartmentId` set only for teams that need it (Data Entry → 101, Valuations → 110, Packaging & QA → 122). Data Entry keeps a dept 101 fallback so that dept-101 tasks with `UsedForKPI IS NULL AND SpecifiedKPIGrp IS NULL/empty` still surface as Data Entry work; any dept-101 task tagged with a different `SpecifiedKPIGrp` (e.g. `BP Help Desk`) is routed by Rule 1 instead. Assessments, CLA, Funder Submission, Funder MIR, Settlement intentionally have **no** dept fallback — counts stay to explicitly-tagged tasks only. Ezy Client Care card removed. Valuations kpiGrp broadened to `LIKE N'%Valuation%'` (Pre‑ exclusion removed). Fallback (Rule 2) requires `ct.UsedForKPI IS NULL` **and** `ct.SpecifiedKPIGrp IS NULL/empty`.
+**Rule 1 — KPI group.**
+A task belongs to a KPI-group team when its `ConfigTasks` row has `UsedForKPI = 1` and a non-empty `SpecifiedKPIGrp`. The card label is the `SpecifiedKPIGrp` value.
 
-> **GROUPING PRIORITY (source of truth — updated 2026-07-01):** Every team / group calculation across the dashboard (team cards, All Teams, SLA / Volume / TAT / Overdue metrics, charts, legends, drill-throughs, popups, tables, filters, aggregates) follows this exact two-step rule:
->
-> 1. **Rule 1 — KPI group (PRIORITY):** If a task has `ct.UsedForKPI = 1` **AND** `ct.SpecifiedKPIGrp` is non-null and non-empty (after `LTRIM`/`RTRIM`), it is grouped by `SpecifiedKPIGrp` (static team pattern match, or auto-discovered dynamic team). Card / table / drill-through labels use `SpecifiedKPIGrp`.
-> 2. **Rule 2 — Department FALLBACK:** Only tasks where **`ct.UsedForKPI IS NULL` AND `ct.SpecifiedKPIGrp IS NULL/empty`** fall back to `s.DepartmentId`. Fallback requires `s.EmployeeStatus = 1`.
->
-> Rule 1 and Rule 2 are mutually exclusive by construction, so a task is **never counted twice**. Any task that satisfies neither rule (e.g. `UsedForKPI=1` with a non-matching kpiGrp, or `UsedForKPI IS NULL` with a non-null kpiGrp) is **excluded entirely** — it does not pollute dept fallback counts.
->
-> **Automatic recalculation:** All calculations reflect the current state of `ConfigTasks` on the next cache refresh (5-min TTL) — no code or config change is required. When a task moves from `(UsedForKPI IS NULL + kpiGrp IS NULL)` into `(UsedForKPI=1 + kpiGrp populated)`, it stops being counted under its dept fallback team and starts being counted under its `SpecifiedKPIGrp` team; the reverse is also automatic.
->
-> SQL CASE precedence enforces this naturally — Rule 1 WHENs are listed first (all 8 static teams + any dynamic teams), Rule 2 WHENs are listed second (only for teams with a `fallbackDeptId`). A task always matches **at most one** WHEN.
+**Rule 2 — Department fallback.**
+All other tasks assigned to active staff (`EmployeeStatus = 1`) group by the staff member's `DepartmentId`. The card label is the department name with any trailing " Department" word stripped (e.g. `Data Entry Department` → `Data Entry`). No `UsedForKPI` restriction — every task in that department is counted.
 
-**Dynamic teams (auto-discovery):**
-- **Whenever a `ConfigTasks` row has `UsedForKPI = 1` and a non-null, non-empty `SpecifiedKPIGrp` value that does not match any of the 8 defined team patterns, the dashboard automatically surfaces that group as a new team card with full KPI data — no code changes or config edits required.**
-- Discovery runs at backend startup and on every 5-minute teams cache refresh (`refreshDynamicGroups()` called at the start of `fetchTeamsData()`).
-- Group names are normalized via `LTRIM`/`RTRIM` in SQL and `.trim()` in JS before use, so leading/trailing whitespace differences in the DB do not create duplicate cards.
-- IDs start at 100, sorted alphabetically for stability (e.g., first new group = id 100, second = 101).
-- Card name = trimmed `SpecifiedKPIGrp` value from the database.
-- Dynamic team cards appear **after "Settlement"** (after id=8) in all views.
-- KPI calculations (volume, SLA %, avg TAT, overdue, deltas, history, alerts) follow the same logic as static teams — scoped to `LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'<name>'`.
-- Default SLA target = 4 hours; users can override via Settings after the card appears.
+**Precedence:** A task matching Rule 1 is never counted under Rule 2. If a Rule-2 dept card's display name collides with an existing Rule-1 card name, the Rule-2 card is suppressed entirely.
 
-**Backend implementation:** `TEAMS` array and helper functions in `backend/server.js`.
-- `TEAMS` (static array, 8 entries): each team has `{ id, name, dept, target, kpiGrp, fallbackDeptId }`.
-- `_dynamicTeams` (runtime array): populated by `refreshDynamicGroups()`, same shape as TEAMS entries plus `isDynamic: true`.
-- `getAllTeams()`: returns `[...TEAMS, ..._dynamicTeams]` — used in all SQL building and result mapping.
-- `getTeamIdCase()`: builds SQL CASE for team id (all static + dynamic teams).
-- `getTeamNameCase()`: builds SQL CASE for team name (all static + dynamic teams).
-- **Team classification — two-tier system (2026-06-30, refined 2026-07-01):** Teams are split into two types based on whether `fallbackDeptId` is set in the `TEAMS` array:
-  - **Has fallback** (ids 1, 2, 4 — `fallbackDeptId` set): Rule 1 (`UsedForKPI=1 AND <kpiGrp>`) fires first; Rule 2 (`UsedForKPI IS NULL AND kpiGrp IS NULL/empty AND DepartmentId=<N> AND EmployeeStatus=1`) fires second as a fallback. Current DeptIds: Data Entry=101, Valuations=110, Packaging & QA=122.
-  - **No fallback / kpiGrp-only** (ids 3, 5, 6, 7, 8 — no `fallbackDeptId`): Only `UsedForKPI=1` tasks whose `SpecifiedKPIGrp` matches the kpiGrp pattern are counted. `Staff.DepartmentId` is never used for classification.
-  - **Dynamic teams** (ids 100+): Always kpiGrp-only — exact `SpecifiedKPIGrp` match only, no fallback.
-- **`getTeamIdCase()` / `getTeamNameCase()` WHEN order (updated 2026-06-30 — grouping priority):** Rule 1 (kpiGrp pattern) WHENs fire **first** for both kpiPrimary and deptPrimary teams: `WHEN ct.UsedForKPI = 1 AND <kpiGrp pattern> THEN <id>`. Rule 2 (DeptId fallback) WHENs fire **second** and apply only when `SpecifiedKPIGrp` is NULL/empty: `WHEN (ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'') AND s.DepartmentId = <N> AND s.EmployeeStatus = 1 THEN <id>`. Rule 2 does **not** require `ct.UsedForKPI = 1` — it captures tasks where both `UsedForKPI` and `SpecifiedKPIGrp` are NULL (typical of unclassified/legacy tasks). The two rules together never double-count because the WHEN conditions are mutually exclusive (Rule 1 requires non-empty kpiGrp, Rule 2 requires NULL/empty kpiGrp).
-- `TEAM_FILTER` constant: `((ct.UsedForKPI = 1) OR ((ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'') AND s.DepartmentId IN (<fallbackDeptIds>) AND s.EmployeeStatus = 1))` — admits Rule 1 tasks via the first branch and Rule 2 fallback candidates via the second branch. The `<fallbackDeptIds>` list is built dynamically from `TEAMS.filter(t => t.fallbackDeptId)`. Tasks with non-NULL `SpecifiedKPIGrp` that don't match any Rule 1 pattern are filtered out entirely — they are not assigned to any team.
-- `CONFIG_TASKS_JOIN` constant: `LEFT JOIN ConfigTasks ct WITH (NOLOCK) ON t.ConfigTaskId = ct.ConfigTaskId` — injected into all aggregate queries.
-- The `?team=<id>` query param on `/api/tasks` and `/api/alert-tasks/:teamId` accepts team id 1–8 (static) or 100+ (dynamic); all routed through `getAllTeams().find(...)`.
-- `TEAM_COLORS` in `constants.js`: Proxy object — 8 known names return `var(--t1)…var(--t8)`; unknown names (dynamic teams) return colors from `_DYNAMIC_PALETTE` (`#1F7A8C`, `#B5446E`, `#556B2F`, `#8B4513`, `#4169E1`, `#8B008B`), assigned by order of first lookup.
-- CSS vars in `styles.css`: `--t1:#0F9ED5` `--t2:#4EA72E` `--t3:#E97132` `--t4:#0E2841` `--t5:#7E350E` `--t6:#F6508F` `--t7:#7030A0` `--t8:#C00000` (`--t9` retained but unused after Ezy Client Care removal).
-- **Exact team order and hex colors (authoritative):**
-  | # | Team Name | Hex Color |
-  |---|-----------|-----------|
-  | 1 | Data Entry | `#0F9ED5` |
-  | 2 | Valuations | `#4EA72E` |
-  | 3 | Assessments | `#E97132` |
-  | 4 | Packaging & QA | `#0E2841` |
-  | 5 | CLA | `#7E350E` |
-  | 6 | Funder Submission | `#F6508F` |
-  | 7 | Funder MIR | `#7030A0` |
-  | 8 | Settlement | `#C00000` |
-- Chart lines `strokeWidth="2.5"`; dots `r=4` (hover `r=6`) in both `trend.jsx` and `history-chart.jsx`
+### How a card switches from dept → KPI
+When you set `UsedForKPI = 1` and `SpecifiedKPIGrp = 'Data Entry'` on a task code, a Rule-1 KPI card appears for "Data Entry". Because the name collides with the Rule-2 dept card, the dept card disappears. The KPI card now shows only those tagged tasks — untagged dept tasks drop out of the card entirely.
+
+### Team discovery queries (`refreshTeams()`)
+- **Rule 1:** Distinct non-empty `SpecifiedKPIGrp` values from `ConfigTasks WHERE UsedForKPI = 1`.
+- **Rule 2:** Distinct departments from `Tasks JOIN Staff JOIN Department` where tasks exist today and staff is active. No `UsedForKPI` filter.
+- Rule-2 names are deduplicated against Rule-1 names (case-insensitive) — clashes are dropped.
+- Team IDs are sequential integers, preserved across refreshes by identity key (`kpi:<name>` or `dept:<deptId>`).
+
+### Key backend functions (`backend/server.js`)
+
+| Function | Purpose |
+|----------|---------|
+| `getAllTeams()` | Returns the live `_teams` array |
+| `buildTeamFilterFor(team)` | Single-team SQL WHERE fragment — uses `SpecifiedKPIGrp` match for KPI teams, `DepartmentId` match for dept teams |
+| `buildKpiScopeFilter(teamIds)` | OR-combines `buildTeamFilterFor()` for a subset of team IDs (used by `/api/kpi-summary?visibleTeams=`) |
+| `TEAM_FILTER` | Global filter covering all currently known teams; used by all other endpoints |
+| `getTeamIdCase()` / `getTeamNameCase()` | SQL CASE expressions — Rule-1 WHENs run first to enforce precedence |
+| `buildTargetExpr(customTargets)` | CASE that returns per-team custom SLA target hours (from `?tN=hours` params), falling back to `t.SLAInHours` |
+| `fetchTeamTooltips()` | Generates the ⓘ tooltip text for each team card — returned as `tooltip` on every `/api/teams` row |
+
+### Team-card ⓘ tooltip text
+Auto-generated by `fetchTeamTooltips()` per team type:
+- **KPI team:** lists every `ConfigTasks.TaskCode` tagged to that `SpecifiedKPIGrp`.
+- **Dept team:** explains it shows all tasks for active staff in that department, and how to convert it to a KPI card.
+
+### Frontend colours
+`TEAM_COLORS` in `constants.js` is a Proxy that assigns colours from a fixed palette (`#1F7A8C`, `#B5446E`, `#556B2F`, `#8B4513`, `#4169E1`, `#8B008B`, cycling) by order of first lookup. Colours are consistent within a session but not pinned to specific team names.
 
 ---
 
@@ -403,6 +359,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 | `/api/staff/departments` | GET | `[{ departmentId, departmentName, totalStaff }]` — all departments with active staff count (`EmployeeStatus = 1`), ordered high → low. DepartmentId IS NOT NULL filter applied. | StaffListView summary table |
 | `/api/staff/absent-today` | GET | `[{ staffId, fullName, departmentName, workStatusName, startedTime, endedTime }]` — all staff absent today (`ConfigWorkStatus.IsAbsent = 1`) where `WorkStatusHistory.StartedTime` is in today range (`>= today` and `< next day`). | StaffListView “Absent Today” table |
 | `/api/staff/department/:id` | GET | `[{ staffId, fullName, employeeStatus, isGroup }]` — active staff (EmployeeStatus=1, non-null name) in one department, ordered by name. | StaffListView drill-through modal |
+| `/api/task-codes` | GET | `[{ ConfigTaskId, TaskCode, FunctionID, FunctionName, TaskName, Inactive, SLA, DepartmentId, DepartmentName, UsedForKPI, SpecifiedKPIGrp }]` — **Admin JWT required.** No cache — always returns live data so `UsedForKPI`/`SpecifiedKPIGrp` changes surface immediately. | TaskCodesView |
 | `/api/admin/users` | GET | `[{ id, email, companyName, role, status, createdAt }]` — status: `approved`. **Admin JWT required.** | AdminView user list |
 | `/api/admin/users/:id` | DELETE | `{ message }` — removes user from `DashboardAccess` and `ConfigReportUsers`. **Admin JWT required.** | AdminView Remove button |
 | `/api/auth/forgot-password` | POST | `{ token, expiresIn }` — generates a 1-hour reset token stored in DB, returns it directly (no email infra). 404 if email not found/not approved. | Login "Lost password" flow |
@@ -778,30 +735,80 @@ SLA Dashboard/
 - Frontend: port **5173** (`http://localhost:5173`)
 - To clear port 5000 if occupied: `Get-Process -Name node | Stop-Process -Force`
 
-### Settings Persistence Rule (2026-06-08, updated 2026-06-30)
+### Settings Persistence Rule (2026-06-08, updated 2026-07-08)
 
-> **INVARIANT: User-configured settings MUST persist across logout/login, page refresh, backend restart, and reopening the site. Settings must NEVER silently revert to defaults.**
+> **INVARIANT: All dashboard settings are stored globally in the database and persist for all users across logout/login, page refresh, and backend restart.**
 
-> **PER-USER ISOLATION (2026-06-30): All settings — including team order (`groupOrder`), SLA targets, at-risk threshold, and loan targets — are stored independently per authenticated user. Changing settings as User A has no effect on User B's settings. Each user always sees their own previously saved configuration.**
+> **ADMIN-ONLY SETTINGS (2026-07-08): The Settings tab is only accessible to users with the `admin` role. Non-admin users cannot see or access the Settings tab. All settings configured by admin apply globally — there is no per-user override.**
 
-- Settings are persisted to `localStorage` key **`sla_dash_settings_<email>`** (one key per authenticated user email). Falls back to `sla_dash_settings` if no email is available.
-- **Helper functions** in `App.jsx`: `settingsKey(email)` returns the per-user key; `loadSettings(email)` reads and merges settings from that key.
-- **Two write paths** (belt-and-suspenders):
-  1. `applySettings()` calls `localStorage.setItem(settingsKey(email), ...)` immediately on Apply.
-  2. A `useEffect([settings])` in `App.jsx` always syncs settings to the current user's key whenever the state changes — this is the safety net that ensures settings are never lost even if a single write path fails.
-- **Read path:** `useState` lazy initializer in `App.jsx` calls `loadSettings(getStoredUser().email)` on every page load/mount. Merges with `DEFAULT_SETTINGS` so new keys added in future releases have sensible defaults without overwriting saved values.
-- **Login path:** `handleLogin()` calls `loadSettings(user.email)` and immediately applies the new user's settings via `setSettings()` + `settingsRef.current`. This ensures a user who logs in after another always sees their own settings — not the previous user's.
-- **Initial data load MUST use saved targets:** `useEffect([authed])` reads `settingsRef.current.targets` and passes them to `getKpiSummary`, `getTeams`, `getAlerts`, and `getHistory`. This ensures the dashboard data reflects user-configured SLA targets from the very first render, not hardcoded defaults.
+> **GLOBAL CONFIG (2026-07-08): Settings are stored in the `DashboardGlobalSettings` SQL table as a single JSON blob under key `'global'`. All authenticated users read from this table on login and on every auto-refresh, ensuring non-admin users always see the most current admin configuration within the refresh interval.**
+
+**DB table:** `DashboardGlobalSettings` — auto-created on backend startup if missing.
+| Column | Type | Notes |
+|--------|------|-------|
+| `SettingKey` | `NVARCHAR(100) PK` | Always `'global'` for the single settings row |
+| `SettingValue` | `NVARCHAR(MAX)` | JSON blob of all settings |
+| `UpdatedAt` | `DATETIME` | Last write timestamp |
+
+**API endpoints:**
+- `GET /api/settings` (requires auth) — returns global settings JSON; all users call this on login and auto-refresh. Returns `{}` if no settings have been saved yet (frontend merges with `DEFAULT_SETTINGS`).
+- `PUT /api/admin/settings` (requires admin) — saves new global settings JSON. Overwrites atomically via MERGE-style upsert.
+
+**Frontend (`App.jsx`) data flow:**
+- `mergeGlobalSettings(gs)` helper — merges API response with `DEFAULT_SETTINGS`, ensuring all expected keys exist.
+- `useEffect([authed])` (on login) — calls `getGlobalSettings()` first, then fetches KPI/teams/tasks data using the returned targets. Settings are the source of truth before any data load.
+- `refreshData` callback (auto-refresh interval) — also calls `getGlobalSettings()` so non-admin users pick up admin configuration changes within the current refresh interval (default: every 5 minutes).
+- `applySettings(newSettings)` — `async`; calls `await saveGlobalSettings(newSettings)` first. Throws on failure so `SettingsView` displays an error. Then updates local state + localStorage cache + re-fetches data.
+- `resetSettings()` — calls `saveGlobalSettings(DEFAULT_SETTINGS)` (fire-and-forget) to reset the DB row, then resets local state.
+- `localStorage` — still used as a client-side cache (safety-net `useEffect([settings])` writes to it). Survives page refresh but is always overridden by the DB value on next load.
+
+**Settings tab access:**
+- Sidebar Settings button and `SettingsView` are wrapped in `{userRole === 'admin' && ...}`. Non-admin users never see the Settings nav item.
+- If a non-admin somehow navigates to `view === 'settings'`, the render guard `view === 'settings' && userRole === 'admin'` blocks the view.
+
+**REMOVE button (team visibility — 2026-07-08):**
+- Each team row in "Team order and SLA target" has a **REMOVE** button (red outline, right of the SLA target input).
+- Clicking REMOVE adds the team's ID to `draft.hiddenTeams`. The row immediately disappears from the active list.
+- A **Hidden Teams** section appears below the active-team list, showing hidden teams with a strikethrough label and a **Restore** button each. Clicking Restore removes the ID from `draft.hiddenTeams`.
+- On **Apply Changes**: `hiddenTeams` array is saved to DB as part of the global settings blob.
+- `teamsDisplay` (App.jsx useMemo) filters out any team whose ID is in `settings.hiddenTeams`. This single filter removes hidden teams from: dashboard team cards, 7-Day Trend chart, TeamsView table, TasksView filter, ReportsView history chart and legend, and all drill-through modals.
+- `alertsDisplay` (App.jsx useMemo) also filters alerts for hidden teams by `a.queueId`.
+- `DEFAULT_SETTINGS.hiddenTeams = []` — no teams hidden by default.
+- `makeDraft(s)` in SettingsView copies `hiddenTeams: Array.isArray(s.hiddenTeams) ? [...s.hiddenTeams] : []`.
+- `orderedDraftTeams` excludes hidden IDs before applying the drag order, so hidden teams do not re-appear in the settings list.
+
+**Immediate automatic recalculation on team remove/restore (2026-07-02 — MANDATORY):**
+
+> **RULE: Removing or restoring a team in Settings triggers immediate, automatic recalculation across ALL dashboard components — no page reload required.**
+
+When the user clicks **Apply Changes** (which calls `applySettings`) or **Reset** (which calls `resetSettings`):
+
+| Component | How it updates immediately |
+|-----------|---------------------------|
+| Team Performance cards | `teamsDisplay` useMemo re-filters instantly; hidden team card disappears |
+| Summary KPI cards (Total Active Tasks, SLA %, Avg TAT, Overdue) | Re-fetched from backend via `getKpiSummary(targets, visibleIds)` scoped to the new visible team set; deltas ("vs yesterday") also recalculate for the same visible team set |
+| 7-Day Trend chart | `TrendChart` receives `teams={teamsDisplay}` — hidden team's line removed automatically |
+| Reports / History chart | `HistoryChart` receives `teams={teamsDisplay}` — hidden team's line removed automatically |
+| TeamsView table | Receives `teams={teamsDisplay}` — hidden team row removed |
+| TasksView team filter | Receives `teams={teamsDisplay}` — hidden team option removed |
+| Active Alerts panel | `alertsDisplay` useMemo re-filters by `settings.hiddenTeams` instantly; hidden team's alerts removed |
+| Drill-through modals | `modalTeam = teamsDisplay.find(...)` — hidden teams' modals are unreachable |
+
+**Mechanism:**
+- `applySettings(newSettings)`: calls `setSettings(newSettings)` synchronously → all `useMemo` derivatives (`teamsDisplay`, `alertsDisplay`) update in the next React render. Then async: `getTeams(targets)` → derives `visibleIds` = IDs of non-hidden teams → `getKpiSummary(targets, visibleIds)` returns KPI scoped to exactly those teams. `getAlerts`, `getHistory`, and all other data endpoints are also re-fetched.
+- `resetSettings()`: calls `setSettings(DEFAULT_SETTINGS)` (hiddenTeams = []) synchronously, then fires the same async data refresh with all teams visible — `getKpiSummary(targets)` (no visibleTeams param → global cache) and `getHistory` run in parallel.
+- Backend cache bypass: `/api/kpi-summary` bypasses its 5-minute cache whenever `?visibleTeams=` is present, ensuring the scoped value is always fresh.
+
+- Settings are cached to `localStorage` key **`sla_dash_settings_<email>`** (per-user client cache only — DB is source of truth). `loadSettings(email)` is used only for the React `useState` lazy initializer (renders placeholder while API responds).
 - `handleLogout()` must **never** remove any settings key — only `sla_token` and `sla_user` are cleared on logout.
-- `resetSettings()` explicitly removes the current user's settings key (`settingsKey(email)`) and resets `settingsRef.current` to `DEFAULT_SETTINGS` before calling `setSettings(DEFAULT_SETTINGS)`. The safety-net `useEffect([settings])` then saves defaults back under that user's key. This only runs when the user explicitly clicks "Reset defaults".
-- **`SettingsView` draft must not depend on `teams` for initialization** — `makeDraft(s)` uses `targets: { ...s.targets }` and `teamOrder: Array.isArray(s.groupOrder) ? [...s.groupOrder] : []` (sparse dict and array copy, no teams loop). The render falls back to `t.target` via `draft.targets[t.id] ?? t.target`, and `orderedDraftTeams` falls back to the natural `teams` array when `draft.teamOrder` is empty. This prevents the bug where draft values become `{}` or `[]` when teams haven't loaded yet.
-- The `useEffect` in `SettingsView` that re-syncs `draft` depends only on `[settings]` — this is correct. Adding `teams` to the deps would reset in-progress edits on auto-refresh.
+- `resetSettings()` calls `saveGlobalSettings(DEFAULT_SETTINGS)` (fire-and-forget) to clear DB settings, removes the localStorage cache entry, resets `settingsRef.current` to `DEFAULT_SETTINGS`, and re-fetches all data for all teams.
+- The `useEffect` in `SettingsView` that re-syncs `draft` depends only on `[settings]` — correct. Adding `teams` would reset in-progress edits on auto-refresh.
 
 ### Team Order (Drag-and-Drop) — Feature Reference (Added 2026-07-01)
 
 Controls the display order of team cards, tables, charts, and legends across all views via drag-and-drop in the Settings tab.
 
-**Settings key:** `settings.groupOrder` — array of team IDs in display order, e.g. `[1, 2, 3, 4, 5, 6, 7, 8, 9]`. Stored in `localStorage` under the per-user key `sla_dash_settings_<email>` — **isolated per user account**. Changing the order as one user never affects another user's saved order.
+**Settings key:** `settings.groupOrder` — array of team IDs in display order. Stored in `DashboardGlobalSettings` DB table (global, applies to all users).
 
 **Default:** `[]` (empty array). When empty, `teamsDisplay` uses the natural backend order (Data Entry → Valuations → Assessments → Packaging & QA → CLA → Funder Submission → Funder MIR → Settlement, then any dynamic groups in alphabetical order).
 
@@ -826,7 +833,7 @@ Teams not in `orderMap` (new dynamic groups) get `Infinity` and sort after all o
 
 **New dynamic teams (ids 100+):** Appended after all ordered teams when first discovered (not in `groupOrder`). After dragging them into position and applying, they join the saved `groupOrder` array.
 
-**Persistence:** Saved via the standard `applySettings()` → `localStorage.setItem('sla_dash_settings', ...)` flow. The safety-net `useEffect([settings])` in `App.jsx` also writes it. Survives logout/login, page refresh, and backend restart. `resetSettings()` clears `groupOrder` back to `[]` (natural order).
+**Persistence:** Saved via `applySettings()` → `PUT /api/admin/settings` → `DashboardGlobalSettings` DB table. localStorage is a client-side cache only. `resetSettings()` clears `groupOrder` back to `[]` (natural order).
 
 ---
 
