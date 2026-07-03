@@ -52,7 +52,7 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 | Settings | `/settings` | Per-team SLA target configuration |
 | User Management | `/admin` | **Admin only** — read-only list of registered users (email, role, joined, status) |
 | Staff List | `/staff-list` | All departments with active staff counts; click row to drill into staff members |
-| Task Codes List | `/task-codes` | **Admin only** — ConfigTasks table with dept/KPI group info; free-text filters; always-fresh data (no cache) |
+| Task Codes List | `/task-codes` | **Admin only** — ConfigTasks table with KPI group info; free-text filters; always-fresh data (no cache) |
 ---
 
 ## 5. KPIs / SLA Metrics
@@ -76,9 +76,9 @@ These cards aggregate **only over teams currently shown in Team Performance** (h
 | Card | What it counts | Status filter |
 |------|---------------|---------------|
 | Total Active Tasks | Open tasks with `DateCreated = today` | `IN (1,4,5,6)` |
-| Overall SLA % | Completed tasks where TAT ≤ target **or** `DateCompleted ≤ SLAAdjustedDate`, divided by all completed tasks today | `= 2`, scoped by `DateCompleted` |
+| Overall SLA % | Completed tasks where `(TotalHoursOnTask ≠ 0 AND TotalHoursOnTask < SLAInHours)` **or** `DateCompleted ≤ SLAAdjustedDate`, divided by all completed tasks today | `= 2`, scoped by `DateCompleted` |
 | Avg Turnaround | Mean elapsed hours — open tasks use `GETDATE() − DateCreated`; closed tasks use `DateCompleted − DateCreated` | all statuses |
-| Overdue / Breached | Open tasks where elapsed hours > configured SLA target | `IN (1,4,5,6)` |
+| Overdue / Breached | Open tasks where elapsed hours > configured SLA target OR `GETDATE() > SLAAdjustedDate`; **plus** closed tasks where `TotalHoursOnTask <> 0 AND TotalHoursOnTask > SLAInHours` OR `DateCompleted > SLAAdjustedDate` | `IN (1,4,5,6)` + `= 2` |
 
 **How scoping works:** The frontend calls `/api/teams`, filters out hidden teams, then passes `?visibleTeams=<ids>` to `/api/kpi-summary`. The backend's `buildKpiScopeFilter(teamIds)` builds an OR-filter for exactly those teams. The global cache is bypassed whenever `visibleTeams` is present.
 
@@ -88,14 +88,15 @@ Each team card shows the same four metrics, but scoped to that team only:
 | Metric | Status filter | Notes |
 |--------|--------------|-------|
 | Volume | `IN (1,4,5,6)` | Active tasks created today |
-| SLA % | `= 2`, `DateCompleted` scope | Same OR-rule as Overall SLA % |
+| SLA % | `= 2`, `DateCompleted` scope | Same OR-rule as Overall SLA %: `(TotalHoursOnTask ≠ 0 AND TotalHoursOnTask < SLAInHours)` OR `DateCompleted ≤ SLAAdjustedDate` |
 | Avg TAT | all statuses | Mixed DATEDIFF formula |
 | Overdue | `IN (1,4,5,6)` | Elapsed hours > team's configured target |
 
 ### Task classification rules
-- **Overdue:** `DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0 > targetExpr`
+- **Overdue (open tasks):** `DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0 > targetExpr` OR `GETDATE() > SLAAdjustedDate` (when `SLAAdjustedDate IS NOT NULL`). `targetExpr` = configured SLA target hours from Settings > Team order and SLA target.
+- **Overdue (closed tasks):** `TotalHoursOnTask <> 0 AND TotalHoursOnTask > SLAInHours` OR `DateCompleted > SLAAdjustedDate` (when `SLAAdjustedDate IS NOT NULL`).
 - **At Risk:** elapsed hours ≥ `atRiskFraction × target` AND ≤ target (default `atRiskFraction` = 87.5 %, configurable in Settings)
-- **SLA % compliance:** a completed task counts as compliant when `(TAT ≤ target) OR (DateCompleted ≤ SLAAdjustedDate)`
+- **SLA % compliance:** a completed task counts as compliant when `(TotalHoursOnTask <> 0 AND TotalHoursOnTask < SLAInHours) OR (DateCompleted ≤ SLAAdjustedDate)`. Tasks where `TotalHoursOnTask = 0` are excluded from the compliant count. Denominator = all completed tasks (`TaskStatusID = 2`) in scope.
 
 ---
 
@@ -359,7 +360,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 | `/api/staff/departments` | GET | `[{ departmentId, departmentName, totalStaff }]` — all departments with active staff count (`EmployeeStatus = 1`), ordered high → low. DepartmentId IS NOT NULL filter applied. | StaffListView summary table |
 | `/api/staff/absent-today` | GET | `[{ staffId, fullName, departmentName, workStatusName, startedTime, endedTime }]` — all staff absent today (`ConfigWorkStatus.IsAbsent = 1`) where `WorkStatusHistory.StartedTime` is in today range (`>= today` and `< next day`). | StaffListView “Absent Today” table |
 | `/api/staff/department/:id` | GET | `[{ staffId, fullName, employeeStatus, isGroup }]` — active staff (EmployeeStatus=1, non-null name) in one department, ordered by name. | StaffListView drill-through modal |
-| `/api/task-codes` | GET | `[{ ConfigTaskId, TaskCode, FunctionID, FunctionName, TaskName, Inactive, SLA, DepartmentId, DepartmentName, UsedForKPI, SpecifiedKPIGrp }]` — **Admin JWT required.** No cache — always returns live data so `UsedForKPI`/`SpecifiedKPIGrp` changes surface immediately. | TaskCodesView |
+| `/api/task-codes` | GET | `[{ ConfigTaskId, TaskCode, FunctionID, FunctionName, TaskName, Inactive, SLA, UsedForKPI, SpecifiedKPIGrp }]` — **Admin JWT required.** No cache — always returns live data so `UsedForKPI`/`SpecifiedKPIGrp` changes surface immediately. | TaskCodesView |
 | `/api/admin/users` | GET | `[{ id, email, companyName, role, status, createdAt }]` — status: `approved`. **Admin JWT required.** | AdminView user list |
 | `/api/admin/users/:id` | DELETE | `{ message }` — removes user from `DashboardAccess` and `ConfigReportUsers`. **Admin JWT required.** | AdminView Remove button |
 | `/api/auth/forgot-password` | POST | `{ token, expiresIn }` — generates a 1-hour reset token stored in DB, returns it directly (no email infra). 404 if email not found/not approved. | Login "Lost password" flow |

@@ -94,8 +94,8 @@ const TeamCard = ({ team, onClick }) => {
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}>
       <div className="card-head">
         <div>
-          <div className="card-dept">{team.dept === 'KPI Group' ? 'KPI GROUP' : ''}</div>
-          <h3 className="card-team">
+          <div className="card-dept" style={{fontSize:'9px'}}>{team.dept === 'KPI Group' ? 'KPI GROUP' : ''}</div>
+          <h3 className="card-team" style={{fontSize:'14px'}}>
             {team.name}
             {team.tooltip && <InfoTip text={team.tooltip} width={320}/>}
           </h3>
@@ -109,23 +109,23 @@ const TeamCard = ({ team, onClick }) => {
 
       <div className="card-stats">
         <div className="stat">
-          <div className="stat-label">Volume<InfoTip text={TOOLTIPS.team.volume} width={230}/></div>
-          <div className="stat-value">{team.volume}</div>
+          <div className="stat-label" style={{fontSize:'9px'}}>Volume<InfoTip text={TOOLTIPS.team.volume} width={230}/></div>
+          <div className="stat-value" style={{fontSize:'20px'}}>{team.volume}</div>
           {fmtD(d.volume) && (
             <div className="stat-delta neutral">{fmtD(d.volume)}</div>
           )}
         </div>
         <div className="stat">
-          <div className="stat-label">Avg TAT<InfoTip text={TOOLTIPS.team.avgTat} width={250}/></div>
-          <div className="stat-value">
+          <div className="stat-label" style={{fontSize:'9px'}}>Avg TAT<InfoTip text={TOOLTIPS.team.avgTat} width={250}/></div>
+          <div className="stat-value" style={{fontSize:'20px'}}>
             {fmtHMS(team.avgTat)}
           </div>
         </div>
         <div className="stat">
-          <div className="stat-label">Overdue<InfoTip text={TOOLTIPS.team.overdue} width={260}/></div>
-          <div className={`stat-value ${hasOverdue ? 'danger' : ''}`}>{team.overdue}</div>
+          <div className="stat-label" style={{fontSize:'9px'}}>Overdue<InfoTip text={TOOLTIPS.team.overdue} width={260}/></div>
+          <div className={`stat-value ${hasOverdue ? 'danger' : ''}`} style={{fontSize:'20px', textAlign:'right', paddingRight:'20px'}}>{team.overdue}</div>
           {fmtD(d.overdue) && (
-            <div className={`stat-delta ${d.overdue > 0 ? 'up' : 'down'}`}>{fmtD(d.overdue)}</div>
+            <div className={`stat-delta ${d.overdue > 0 ? 'up' : 'down'}`} style={{textAlign:'right', paddingRight:'20px'}}>{fmtD(d.overdue)}</div>
           )}
         </div>
       </div>
@@ -280,7 +280,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                               <th style={{width: '100px'}}>App ID</th>
                               <th style={{width: '100px'}}>Create Dte</th>
                               <th style={{width: '120px'}}>SLAAdjusted Dte</th>
-                              <th style={{minWidth: '660px'}}>Description</th>
+                              <th>Description</th>
                               <th style={{width: '100px'}}>Current</th>
                               <th style={{width: '90px'}}>Status</th>
                               <th style={{width: '180px'}}>TAT vs Target</th>
@@ -303,8 +303,14 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                                 <tr key={t.TaskID + '-' + t.taskType} className={rowCls}>
                                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TaskID}</span></td>
                                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.ApplicationID != null ? t.ApplicationID : '-'}</span></td>
-                                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.CreateDte || '-'}</span></td>
-                                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.SLAAdjustedDte || '-'}</span></td>
+                                  <td style={{whiteSpace:'nowrap'}}>
+                                    <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(t.CreateDte||'').split(' ')[0]||'-'}</div>
+                                    {t.CreateDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{t.CreateDte.split(' ')[1]}</div>}
+                                  </td>
+                                  <td style={{whiteSpace:'nowrap'}}>
+                                    <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(t.SLAAdjustedDte||'').split(' ')[0]||'-'}</div>
+                                    {t.SLAAdjustedDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{t.SLAAdjustedDte.split(' ')[1]}</div>}
+                                  </td>
                                   <td>
                                     <div className="task-desc-main">{desc}</div>
                                     <div className="task-client">{t.ShortDescription || '-'}</div>
@@ -397,8 +403,14 @@ const TaskRow = ({ task, target }) => {
     <tr className={rowCls}>
       <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.id}</span></td>
       <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.appId != null ? task.appId : '-'}</span></td>
-      <td style={{whiteSpace:'nowrap'}}><span className="soft">{task.createDte || '-'}</span></td>
-      <td style={{whiteSpace:'nowrap'}}><span className="soft">{task.slaAdjustedDte || '-'}</span></td>
+      <td style={{whiteSpace:'nowrap'}}>
+        <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(task.createDte||'').split(' ')[0]||'-'}</div>
+        {task.createDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{task.createDte.split(' ')[1]}</div>}
+      </td>
+      <td style={{whiteSpace:'nowrap'}}>
+        <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(task.slaAdjustedDte||'').split(' ')[0]||'-'}</div>
+        {task.slaAdjustedDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{task.slaAdjustedDte.split(' ')[1]}</div>}
+      </td>
       <td>
         <div className="task-desc-main">{task.desc}</div>
         <div className="task-client">{task.client}</div>
@@ -483,7 +495,7 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10 }) => {
                 <th style={{width: '100px'}}>App ID</th>
                 <th style={{width: '100px'}}>Create Dte</th>
                 <th style={{width: '120px'}}>SLAAdjusted Dte</th>
-                <th style={{minWidth: '660px'}}>Description</th>
+                <th>Description</th>
                 <th style={{width: '100px'}}>Current</th>
                 <th style={{width: '90px'}}>Status</th>
                 <th style={{width: '180px'}}>TAT vs Target</th>

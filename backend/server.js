@@ -442,11 +442,19 @@ async function fetchKpiData(customTargets = {}, visibleTeamIds = null) {
         SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
                  AND t.TaskStatusID IN (1, 4, 5, 6)
                  THEN 1 ELSE 0 END)                                              AS totalTasks,
-        -- overdue = open tasks where real-time TAT > configured SLA target OR past SLAAdjustedDate
+        -- overdue = open tasks past SLA target/SLAAdjustedDate OR closed tasks with TAT > SLAInHours or past SLAAdjustedDate
         SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
-                 AND t.TaskStatusID IN (1, 4, 5, 6)
-                 AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr}
-                      OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
+                 AND (
+                   (t.TaskStatusID IN (1, 4, 5, 6) AND (
+                     DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr}
+                     OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)
+                   ))
+                   OR
+                   (t.TaskStatusID = 2 AND (
+                     (t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask > t.SLAInHours)
+                     OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted > t.SLAAdjustedDate)
+                   ))
+                 )
                  THEN 1 ELSE 0 END)                                              AS totalOverdue,
         -- avgTat = mean elapsed hours across all tasks created today
         --          open tasks: GETDATE()-DateCreated; closed: DateCompleted-DateCreated
@@ -460,9 +468,17 @@ async function fetchKpiData(customTargets = {}, visibleTeamIds = null) {
                  AND t.TaskStatusID IN (1, 4, 5, 6)
                  THEN 1 ELSE 0 END)                                              AS prevTasks,
         SUM(CASE WHEN t.DateCreated >= '${prev}' AND t.DateCreated < '${prevNext}'
-                 AND t.TaskStatusID IN (1, 4, 5, 6)
-                 AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr}
-                      OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
+                 AND (
+                   (t.TaskStatusID IN (1, 4, 5, 6) AND (
+                     DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr}
+                     OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)
+                   ))
+                   OR
+                   (t.TaskStatusID = 2 AND (
+                     (t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask > t.SLAInHours)
+                     OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted > t.SLAAdjustedDate)
+                   ))
+                 )
                  THEN 1 ELSE 0 END)                                              AS prevOverdue,
         AVG(CASE WHEN t.DateCreated >= '${prev}' AND t.DateCreated < '${prevNext}'
                  THEN CASE WHEN t.TaskStatusID IN (1,4,5,6)
@@ -478,14 +494,13 @@ async function fetchKpiData(customTargets = {}, visibleTeamIds = null) {
     `),
     // SLA% uses DateCompleted � completed tasks regardless of when they were created.
     // Compliance uses a combined OR rule (count once):
-    //   (closed-task TAT <= targetExpr) OR (DateCompleted <= SLAAdjustedDate when SLAAdjustedDate exists).
-    // targetExpr uses custom per-team target hours when configured, else t.SLAInHours.
+    //   (TotalHoursOnTask <> 0 AND TotalHoursOnTask < SLAInHours) OR (DateCompleted <= SLAAdjustedDate when SLAAdjustedDate exists).
     pool.request().query(`
       SELECT
         CAST(
           SUM(CASE WHEN t.DateCompleted >= '${today}' AND t.DateCompleted < '${todayNext}'
                    AND (
-                     DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${targetExpr}
+                     (t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask < t.SLAInHours)
                      OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
                    )
                    THEN 1 ELSE 0 END) AS FLOAT)
@@ -494,7 +509,7 @@ async function fetchKpiData(customTargets = {}, visibleTeamIds = null) {
         CAST(
           SUM(CASE WHEN t.DateCompleted >= '${prev}' AND t.DateCompleted < '${prevNext}'
                    AND (
-                     DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${targetExpr}
+                     (t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask < t.SLAInHours)
                      OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
                    )
                    THEN 1 ELSE 0 END) AS FLOAT)
@@ -551,10 +566,18 @@ async function fetchTeamsData(customTargets = {}) {
                  THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0
                  ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0
             END)                                                                    AS avgTat,
-        -- overdue: open tasks where real-time TAT > configured SLA target OR past SLAAdjustedDate
-        SUM(CASE WHEN t.TaskStatusID IN (1, 4, 5, 6)
-                 AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr}
-                      OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
+        -- overdue: open tasks past SLA target/SLAAdjustedDate OR closed tasks with TAT > SLAInHours or past SLAAdjustedDate
+        SUM(CASE WHEN (
+                   t.TaskStatusID IN (1, 4, 5, 6) AND (
+                     DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr}
+                     OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)
+                   )
+                 ) OR (
+                   t.TaskStatusID = 2 AND (
+                     (t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask > t.SLAInHours)
+                     OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted > t.SLAAdjustedDate)
+                   )
+                 )
                  THEN 1 ELSE 0 END) AS overdue
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
@@ -569,8 +592,8 @@ async function fetchTeamsData(customTargets = {}) {
         CASE ${getTeamIdCase()} END AS teamId,
         SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS todayVol,
         SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS prevVol,
-        SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS todayOverdue,
-        SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS prevOverdue,
+        SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND ((t.TaskStatusID IN (1,4,5,6) AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))) OR (t.TaskStatusID = 2 AND ((t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask > t.SLAInHours) OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted > t.SLAAdjustedDate)))) THEN 1 ELSE 0 END) AS todayOverdue,
+        SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND ((t.TaskStatusID IN (1,4,5,6) AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${targetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))) OR (t.TaskStatusID = 2 AND ((t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask > t.SLAInHours) OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted > t.SLAAdjustedDate)))) THEN 1 ELSE 0 END) AS prevOverdue,
         AVG(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' THEN CASE WHEN t.TaskStatusID IN (1,4,5,6) THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 END ELSE NULL END) AS todayTat,
         AVG(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  THEN CASE WHEN t.TaskStatusID IN (1,4,5,6) THEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 ELSE DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 END ELSE NULL END) AS prevTat
       FROM Tasks t WITH (NOLOCK)
@@ -587,7 +610,7 @@ async function fetchTeamsData(customTargets = {}) {
         CAST(
           SUM(CASE WHEN t.DateCompleted >= '${today}' AND t.DateCompleted < '${todayNext}'
                    AND (
-                     DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${targetExpr}
+                     (t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask < t.SLAInHours)
                      OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
                    )
                    THEN 1 ELSE 0 END) AS FLOAT)
@@ -596,7 +619,7 @@ async function fetchTeamsData(customTargets = {}) {
         CAST(
           SUM(CASE WHEN t.DateCompleted >= '${prev}' AND t.DateCompleted < '${prevNext}'
                    AND (
-                     DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${targetExpr}
+                     (t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask < t.SLAInHours)
                      OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
                    )
                    THEN 1 ELSE 0 END) AS FLOAT)
@@ -871,8 +894,8 @@ app.get('/api/tasks', async (req, res) => {
       SELECT TOP 500
         t.TaskID,
         t.ApplicationID,
-        CONVERT(VARCHAR(10), t.DateCreated, 103) AS CreateDte,
-        CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) AS SLAAdjustedDte,
+        CONVERT(VARCHAR(10), t.DateCreated, 103) + ' ' + CONVERT(VARCHAR(8), t.DateCreated, 108) AS CreateDte,
+        CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) + ' ' + CONVERT(VARCHAR(8), t.SLAAdjustedDate, 108) AS SLAAdjustedDte,
         t.TaskName,
         t.ShortDescription,
         t.CreatedBy,
@@ -966,7 +989,7 @@ async function fetchHistoryData(range = '90d', customTargets = {}) {
         CASE ${getTeamIdCase()} END                                               AS teamId,
         COUNT(*)                                                               AS total,
         SUM(CASE WHEN (
-              DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 <= ${targetExpr}
+              (t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask < t.SLAInHours)
               OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted <= t.SLAAdjustedDate)
             ) THEN 1 ELSE 0 END) AS compliant
       FROM Tasks t WITH (NOLOCK)
@@ -1076,14 +1099,15 @@ async function fetchAlertsData(customTargets = {}) {
   const result = await pool.request().query(`
     SELECT
       CASE ${getTeamIdCase()} END                                                AS teamId,
-      COUNT(*)                                                                AS total,
-      SUM(CASE WHEN DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 <= ${alertTargetExpr}
+      SUM(CASE WHEN t.TaskStatusID IN (1, 4, 5, 6) THEN 1 ELSE 0 END)          AS total,
+      SUM(CASE WHEN t.TaskStatusID IN (1, 4, 5, 6)
+                    AND DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 <= ${alertTargetExpr}
                     AND (t.SLAAdjustedDate IS NULL OR ${NOW_SQL} <= t.SLAAdjustedDate) THEN 1 ELSE 0 END) AS compliant,
-      SUM(CASE WHEN (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${alertTargetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS overdue
+      SUM(CASE WHEN (t.TaskStatusID IN (1, 4, 5, 6) AND (DATEDIFF(MINUTE, t.DateCreated, ${NOW_SQL}) / 60.0 > ${alertTargetExpr} OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))) OR (t.TaskStatusID = 2 AND ((t.TotalHoursOnTask <> 0 AND t.TotalHoursOnTask > t.SLAInHours) OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted > t.SLAAdjustedDate))) THEN 1 ELSE 0 END) AS overdue
     FROM Tasks t WITH (NOLOCK)
     LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
     ${CONFIG_TASKS_JOIN}
-    WHERE t.TaskStatusID IN (1, 4, 5, 6)
+    WHERE t.TaskStatusID IN (1, 2, 4, 5, 6)
       AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
       AND ${TEAM_FILTER}
     GROUP BY CASE ${getTeamIdCase()} END
@@ -1179,8 +1203,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
         SELECT TOP 25
           t.TaskID,
           t.ApplicationID,
-          CONVERT(VARCHAR(10), t.DateCreated, 103) AS CreateDte,
-          CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) AS SLAAdjustedDte,
+          CONVERT(VARCHAR(10), t.DateCreated, 103) + ' ' + CONVERT(VARCHAR(8), t.DateCreated, 108) AS CreateDte,
+          CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) + ' ' + CONVERT(VARCHAR(8), t.SLAAdjustedDate, 108) AS SLAAdjustedDte,
           t.ShortDescription,
           t.TotalHoursOnTask,
           t.SLAInHours,
@@ -1212,8 +1236,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
         SELECT TOP 25
           t.TaskID,
           t.ApplicationID,
-          CONVERT(VARCHAR(10), t.DateCreated, 103) AS CreateDte,
-          CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) AS SLAAdjustedDte,
+          CONVERT(VARCHAR(10), t.DateCreated, 103) + ' ' + CONVERT(VARCHAR(8), t.DateCreated, 108) AS CreateDte,
+          CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) + ' ' + CONVERT(VARCHAR(8), t.SLAAdjustedDate, 108) AS SLAAdjustedDte,
           t.ShortDescription,
           t.TotalHoursOnTask,
           t.SLAInHours,
@@ -1729,7 +1753,7 @@ app.get('/api/task-codes', requireAuth, async (req, res) => {
   try {
     const pool = await connectDB();
     const result = await pool.request().query(`
-      SELECT DISTINCT
+      SELECT
         f.ConfigTaskId,
         f.TaskCode,
         cf.FunctionID,
@@ -1737,14 +1761,9 @@ app.get('/api/task-codes', requireAuth, async (req, res) => {
         f.TaskName,
         f.Inactive,
         f.SLA,
-        b.DepartmentId,
-        b.Name        AS DepartmentName,
         f.UsedForKPI,
         LTRIM(RTRIM(ISNULL(f.SpecifiedKPIGrp, ''))) AS SpecifiedKPIGrp
       FROM ConfigTasks f WITH (NOLOCK)
-      LEFT JOIN Tasks          c  WITH (NOLOCK) ON c.ConfigTaskId = f.ConfigTaskId
-      LEFT JOIN Staff          a  WITH (NOLOCK) ON a.StaffID = c.AssignedTo
-      LEFT JOIN Department     b  WITH (NOLOCK) ON b.DepartmentId = a.DepartmentId
       LEFT JOIN ConfigFunction cf WITH (NOLOCK) ON cf.FunctionID = f.FunctionID
       ORDER BY f.TaskCode
     `);

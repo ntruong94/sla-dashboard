@@ -1056,6 +1056,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  table-layout: fixed;
 }
 .task-table thead th {
   position: sticky;

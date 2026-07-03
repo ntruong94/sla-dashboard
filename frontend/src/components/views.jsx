@@ -162,8 +162,14 @@ const TasksView = ({ teams, tasks }) => {
                 <tr key={t.teamId + '-' + t.id} className={rowCls}>
                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.id}</span></td>
                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.appId != null ? t.appId : '-'}</span></td>
-                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.createDte || '-'}</span></td>
-                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.slaAdjustedDte || '-'}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(t.createDte||'').split(' ')[0]||'-'}</div>
+                    {t.createDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{t.createDte.split(' ')[1]}</div>}
+                  </td>
+                  <td style={{whiteSpace:'nowrap'}}>
+                    <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(t.slaAdjustedDte||'').split(' ')[0]||'-'}</div>
+                    {t.slaAdjustedDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{t.slaAdjustedDte.split(' ')[1]}</div>}
+                  </td>
                   <td>
                     <div className="task-desc-main">{t.desc}</div>
                     <div className="task-client">{t.client}</div>
@@ -1057,7 +1063,6 @@ function TaskCodesView() {
   const [fCode,     setFCode]     = React.useState('');
   const [fName,     setFName]     = React.useState('');
   const [fInactive, setFInactive] = React.useState('');
-  const [fDept,     setFDept]     = React.useState('');
   const [fKpi,      setFKpi]      = React.useState('');
   const [fGrp,      setFGrp]      = React.useState('');
 
@@ -1075,18 +1080,16 @@ function TaskCodesView() {
     const lc = s => (s || '').toLowerCase();
     const qCode     = fCode.trim().toLowerCase();
     const qName     = fName.trim().toLowerCase();
-    const qDept     = fDept.trim().toLowerCase();
     const qGrp      = fGrp.trim().toLowerCase();
     return rows.filter(r => {
       if (qCode && !lc(r.TaskCode).includes(qCode)) return false;
       if (qName && !lc(r.TaskName).includes(qName)) return false;
       if (fInactive !== '' && String(r.Inactive ? '1' : '0') !== fInactive) return false;
-      if (qDept && !lc(r.DepartmentName).includes(qDept)) return false;
       if (fKpi !== '' && String(r.UsedForKPI === null ? '' : r.UsedForKPI ? '1' : '0') !== fKpi) return false;
       if (qGrp && !lc(r.SpecifiedKPIGrp).includes(qGrp)) return false;
       return true;
     });
-  }, [rows, fCode, fName, fInactive, fDept, fKpi, fGrp]);
+  }, [rows, fCode, fName, fInactive, fKpi, fGrp]);
 
   const inputStyle = { padding: '7px 12px', fontSize: 13, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--ink)', outline: 'none' };
   const selectStyle = { ...inputStyle, cursor: 'pointer' };
@@ -1125,7 +1128,6 @@ function TaskCodesView() {
               <option value="0">Active only</option>
               <option value="1">Inactive only</option>
             </select>
-            <input type="text" placeholder="Department Name" value={fDept} onChange={e => setFDept(e.target.value)} style={{ ...inputStyle, width: 180 }}/>
             <select value={fKpi} onChange={e => setFKpi(e.target.value)} style={{ ...selectStyle, width: 150 }}>
               <option value="">UsedForKPI: All</option>
               <option value="1">UsedForKPI = 1</option>
@@ -1152,8 +1154,6 @@ function TaskCodesView() {
                     <th>TaskName</th>
                     <th style={{ textAlign: 'center' }}>Inactive</th>
                     <th style={{ textAlign: 'right' }}>SLA</th>
-                    <th>DeptId</th>
-                    <th>DepartmentName</th>
                     <th style={{ textAlign: 'center' }}>UsedForKPI</th>
                     <th>SpecifiedKPIGrp</th>
                   </tr>
@@ -1173,8 +1173,6 @@ function TaskCodesView() {
                         }
                       </td>
                       <td style={{ textAlign: 'right' }}>{r.SLA ?? '—'}</td>
-                      <td><span className="soft">{r.DepartmentId ?? '—'}</span></td>
-                      <td>{r.DepartmentName || '—'}</td>
                       <td style={{ textAlign: 'center' }}>
                         {r.UsedForKPI === null
                           ? <span className="soft">—</span>
@@ -1227,8 +1225,6 @@ function AdminView() {
     rejected: { background: 'color-mix(in srgb, var(--bad)  18%, transparent)', color: 'var(--bad)',  fontWeight: 600 },
   };
 
-  const nonAdmin = users.filter(u => u.role !== 'admin');
-
   return (
     <main className="content">
       <div className="page-head">
@@ -1259,9 +1255,9 @@ function AdminView() {
         <section className="trend-card" style={{ padding: '22px 26px' }}>
           <h2 className="section-title" style={{ marginBottom: 4 }}>All Users</h2>
           <div className="section-sub" style={{ marginBottom: 18 }}>
-            {nonAdmin.length} registered user{nonAdmin.length !== 1 ? 's' : ''}
+            {users.length} registered user{users.length !== 1 ? 's' : ''}
           </div>
-          {nonAdmin.length === 0 ? (
+          {users.length === 0 ? (
             <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--ink-muted)', fontSize: 14 }}>
               No users registered yet.
             </div>
@@ -1277,7 +1273,7 @@ function AdminView() {
                 </tr>
               </thead>
               <tbody>
-                {nonAdmin.map(u => (
+                {users.map(u => (
                   <tr key={u.id}>
                     <td><strong>{u.email}</strong></td>
                     <td><span className="dept-tag">{u.role}</span></td>
@@ -1288,13 +1284,17 @@ function AdminView() {
                       </span>
                     </td>
                     <td style={{ textAlign: 'center' }}>
-                      <button
-                        onClick={() => handleRemove(u)}
-                        disabled={removing === u.id}
-                        style={{ background: 'none', border: '1px solid var(--bad)', color: 'var(--bad)', borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: removing === u.id ? 'not-allowed' : 'pointer', opacity: removing === u.id ? 0.5 : 1 }}
-                      >
-                        {removing === u.id ? '…' : 'Remove'}
-                      </button>
+                      {u.role !== 'admin' ? (
+                        <button
+                          onClick={() => handleRemove(u)}
+                          disabled={removing === u.id}
+                          style={{ background: 'none', border: '1px solid var(--bad)', color: 'var(--bad)', borderRadius: 6, padding: '2px 10px', fontSize: 12, cursor: removing === u.id ? 'not-allowed' : 'pointer', opacity: removing === u.id ? 0.5 : 1 }}
+                        >
+                          {removing === u.id ? '…' : 'Remove'}
+                        </button>
+                      ) : (
+                        <span style={{ color: 'var(--ink-muted)', fontSize: 12 }}>—</span>
+                      )}
                     </td>
                   </tr>
                 ))}
