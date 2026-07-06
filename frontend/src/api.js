@@ -83,8 +83,8 @@ export const getHistory   = (range = '90d', targets = {}) => {
   return request(`/api/history?range=${range}${tqs ? '&' + tqs.slice(1) : ''}`);
 };
 export const getAlerts    = (targets = {})  => request(`/api/alerts${buildTargetQS(targets)}`);
-export const getAlertTasks = (teamId, atRiskPct = 87.5, customTarget = null) => {
-  let url = `/api/alert-tasks/${teamId}?atRiskPct=${atRiskPct}`;
+export const getAlertTasks = (teamId, atRiskPct = 87.5, customTarget = null, limit = 50) => {
+  let url = `/api/alert-tasks/${teamId}?atRiskPct=${atRiskPct}&limit=${limit}`;
   if (customTarget > 0) url += `&customTarget=${customTarget}`;
   return request(url);
 };

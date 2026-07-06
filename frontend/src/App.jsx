@@ -216,6 +216,7 @@ export default function App() {
   const [error, setError]             = useState('');
   const [dimmedTeams, setDimmed]      = useState(new Set());
   const [modalTeamId, setModalTeamId] = useState(null);
+  const [modalDrillData, setModalDrillData] = useState({ tasks: [], loading: false, error: null });
   const [loanModal, setLoanModal]     = useState(null); // { type, label } | null
   const [loanDetail, setLoanDetail]   = useState({ data: [], loading: false, error: null });
   const [settings, setSettings]       = useState(() => {
@@ -346,7 +347,14 @@ export default function App() {
     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
   }), []);
   const dismissAlert  = useCallback(id => setAlerts(prev => prev.filter(a => a.id !== id)), []);
-  const closeModal    = useCallback(() => setModalTeamId(null), []);
+  const closeModal    = useCallback(() => { setModalTeamId(null); setModalDrillData({ tasks: [], loading: false, error: null }); }, []);
+  const openModal     = useCallback((teamId) => {
+    setModalTeamId(teamId);
+    setModalDrillData({ tasks: [], loading: true, error: null });
+    getTasks(teamId, null, 'today')
+      .then(data => setModalDrillData({ tasks: data, loading: false, error: null }))
+      .catch(err  => setModalDrillData({ tasks: [], loading: false, error: err.message }));
+  }, []);
   const openLoanModal = useCallback((type, label) => {
     setLoanModal({ type, label });
     setLoanDetail({ data: [], loading: true, error: null });
@@ -454,8 +462,10 @@ export default function App() {
     return [...filtered].sort((a, b) => (orderMap.get(a.queueId) ?? Infinity) - (orderMap.get(b.queueId) ?? Infinity));
   }, [alerts, settings.groupOrder, settings.hiddenTeams]);
   const modalTeam  = teamsDisplay.find(t => t.id === modalTeamId) ?? null;
-  const modalTaskLimit = modalTeam ? Math.min(settings.modalTaskCount, modalTeam.volume ?? settings.modalTaskCount) : settings.modalTaskCount;
-  const modalTasks = modalTeam ? (modalTasksByTeam[modalTeam.id] || []).slice(0, modalTaskLimit) : [];
+  const modalTaskLimit = settings.modalTaskCount || 50;
+  const modalTasks = modalTeam
+    ? modalDrillData.tasks.map(t => normalizeTask(t, settings)).slice(0, modalTaskLimit)
+    : [];
 
   // AEST time strings
   const timeFmt    = now.toLocaleTimeString('en-AU', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Australia/Sydney' });
@@ -646,7 +656,7 @@ export default function App() {
                 </div>
                 <div className="team-grid">
                   {teamsDisplay.map(t => (
-                    <TeamCard key={t.id} team={t} onClick={() => setModalTeamId(t.id)}/>
+                    <TeamCard key={t.id} team={t} onClick={() => openModal(t.id)}/>
                   ))}
                 </div>
 
@@ -688,7 +698,7 @@ export default function App() {
         )}
 
         {/* â”€â”€ Secondary views (each manages its own <main className="content">) â”€â”€ */}
-        {view === 'teams'   && <TeamsView teams={teamsDisplay} onOpenTeam={setModalTeamId}/>}
+        {view === 'teams'   && <TeamsView teams={teamsDisplay} onOpenTeam={openModal}/>}
         {view === 'tasks'   && <TasksView teams={teamsDisplay} tasks={modalTasksByTeam}/>}
         {view === 'reports' && (
           <ReportsView
@@ -699,7 +709,7 @@ export default function App() {
             toggleDim={toggleDim}
           />
         )}
-        {view === 'alerts'   && <AlertsView  alerts={alertsDisplay} onDismiss={dismissAlert}/>}
+        {view === 'alerts'   && <AlertsView  alerts={alertsDisplay} onDismiss={dismissAlert} maxTasks={settings.modalTaskCount}/>}
         {view === 'settings' && userRole === 'admin' && <SettingsView teams={teams} settings={settings} onApply={applySettings} onReset={resetSettings}/>}
         {view === 'staff-list' && <StaffListView />}
         {view === 'task-codes' && userRole === 'admin' && <TaskCodesView />}
@@ -708,7 +718,7 @@ export default function App() {
 
       {/* Task drill-down modal */}
       {modalTeam && (
-        <TaskModal team={modalTeam} tasks={modalTasks} onClose={closeModal} maxTasks={modalTaskLimit}/>
+        <TaskModal team={modalTeam} tasks={modalTasks} loading={modalDrillData.loading} onClose={closeModal} maxTasks={modalTaskLimit}/>
       )}
 
       {/* Loan drill-down modal */}

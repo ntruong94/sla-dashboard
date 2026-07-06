@@ -126,6 +126,10 @@ function computeDates() {
 const _NULL_KPIGRP     = `(ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'')`;
 const _NONEMPTY_KPIGRP = `(ct.SpecifiedKPIGrp IS NOT NULL AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) <> N'')`;
 const _RULE1_MATCH = `(ct.UsedForKPI = 1 AND ${_NONEMPTY_KPIGRP})`;
+// NULL-safe negation of RULE1: tasks that do NOT belong to any KPI group.
+// Uses ISNULL(ct.UsedForKPI, 0) so rows with no ConfigTasks match (LEFT JOIN → NULL)
+// evaluate as non-KPI rather than as unknown (which SQL would exclude from WHERE).
+const _NOT_RULE1_MATCH = `(ISNULL(ct.UsedForKPI, 0) <> 1 OR ${_NULL_KPIGRP})`;
 // Rule 2 no longer restricts on ConfigTasks. Kept as a template-literal placeholder
 // so existing `(${_RULE2_MATCH} AND s.DepartmentId = X ...)` composed filters remain
 // syntactically valid and semantically unchanged (SQL Server folds `1 = 1` away).
@@ -150,11 +154,16 @@ function teamKey(t) {
 }
 
 // Filter fragment for a single team (used by per-team endpoints).
+// Must mirror the CASE expression precedence: KPI teams first (Rule 1), dept teams second (Rule 2).
+// For dept teams we add NOT _RULE1_MATCH so that KPI-tagged tasks assigned to a dept-team
+// staff member are excluded — consistent with how the CASE expression assigns them to the
+// KPI team, not the dept team. Without this, drill-through/tasks endpoints return more rows
+// than the alerts/teams CASE-based aggregates count for the same team.
 function buildTeamFilterFor(team) {
   if (team.kind === 'kpi') {
     return `(${_RULE1_MATCH} AND LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'${sqlStr(team.kpiGrpValue)}')`;
   }
-  return `(${_RULE2_MATCH} AND s.DepartmentId = ${team.departmentId} AND s.EmployeeStatus = 1)`;
+  return `(${_RULE2_MATCH} AND s.DepartmentId = ${team.departmentId} AND s.EmployeeStatus = 1 AND ${_NOT_RULE1_MATCH})`;
 }
 
 // Builds a scoped OR-filter for KPI queries when only a subset of teams is visible
@@ -888,10 +897,12 @@ app.get('/api/tasks', async (req, res) => {
 
     // Tasks are mapped to teams via Staff.DepartmentId (AssignedTo ? Staff ? DepartmentId).
     // SLARemaining comes from TaskRelation (IsCurrent = 1 row).
-    // Limited to TOP 500 sorted by worst SLA first to avoid timeout on large datasets.
-    // TaskRelation join removed � expensive on large tables; SLARemaining set to NULL.
+    // When scoped to a specific team + today, no row cap needed (single team, single day).
+    // For the global all-teams query, limit to TOP 500 to avoid timeout on large datasets.
+    // TaskRelation join removed - expensive on large tables; SLARemaining set to NULL.
+    const topClause = (team && scope === 'today') ? '' : 'TOP 500';
     let query = `
-      SELECT TOP 500
+      SELECT ${topClause}
         t.TaskID,
         t.ApplicationID,
         CONVERT(VARCHAR(10), t.DateCreated, 103) + ' ' + CONVERT(VARCHAR(8), t.DateCreated, 108) AS CreateDte,
@@ -1157,6 +1168,9 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
 
   // atRiskFraction: clamped to [0.50, 0.99] to prevent nonsensical values
   const atRiskFraction = Math.min(0.99, Math.max(0.50, parseFloat(req.query.atRiskPct || 87.5) / 100));
+  // limit: total rows to return split evenly across overdue + at-risk branches
+  const limitTotal = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  const topPerBranch = Math.ceil(limitTotal / 2);
   // customTarget: optional override for this team's SLA hours (from Settings).
   // Falls back to the team's default target (e.g. 4h), NOT t.SLAInHours (per-task DB field
   // that varies by task type and can be 0.5h), so status and TAT bar match All Active Tasks.
@@ -1200,7 +1214,7 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
     // slaExpr: custom target hours from Settings if configured, else DB t.SLAInHours.
     const result = await pool.request().query(`
       SELECT * FROM (
-        SELECT TOP 25
+        SELECT TOP ${topPerBranch}
           t.TaskID,
           t.ApplicationID,
           CONVERT(VARCHAR(10), t.DateCreated, 103) + ' ' + CONVERT(VARCHAR(8), t.DateCreated, 108) AS CreateDte,
@@ -1233,7 +1247,7 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
       ) AS Overdue
       UNION ALL
       SELECT * FROM (
-        SELECT TOP 25
+        SELECT TOP ${topPerBranch}
           t.TaskID,
           t.ApplicationID,
           CONVERT(VARCHAR(10), t.DateCreated, 103) + ' ' + CONVERT(VARCHAR(8), t.DateCreated, 108) AS CreateDte,

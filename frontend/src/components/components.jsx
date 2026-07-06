@@ -192,7 +192,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
     if (taskMap[a.id]) return; // already fetched
     setLoadingId(a.id);
     setErrorId(null);
-    getAlertTasks(a.queueId, atRiskPct, customTargets[a.queueId] || null)
+    getAlertTasks(a.queueId, atRiskPct, customTargets[a.queueId] || null, maxTasks)
       .then(data => { setTaskMap(prev => ({ ...prev, [a.id]: data })); setLoadingId(null); })
       .catch(() => { setErrorId(a.id); setLoadingId(null); });
   };
@@ -442,7 +442,7 @@ const TaskRow = ({ task, target }) => {
 };
 
 // --- Modal ---
-const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10 }) => {
+const TaskModal = ({ team, tasks = [], loading = false, onClose, maxTasks = 10 }) => {
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -503,7 +503,12 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10 }) => {
               </tr>
             </thead>
             <tbody>
-              {tasks.map(t => <TaskRow key={t.id} task={t} target={team.target}/>)}
+              {loading
+                ? <tr><td colSpan={9} style={{textAlign:'center',padding:'24px',color:'var(--muted)'}}>Loading tasks…</td></tr>
+                : tasks.length === 0
+                  ? <tr><td colSpan={9} style={{textAlign:'center',padding:'24px',color:'var(--muted)'}}>No active tasks found for today.</td></tr>
+                  : tasks.map(t => <TaskRow key={t.id} task={t} target={team.target}/>)
+              }
             </tbody>
           </table>
         </div>

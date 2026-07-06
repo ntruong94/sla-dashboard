@@ -687,6 +687,7 @@ SLA Dashboard/
 ### Tooltip Rule (2026-06-09)
 - All shared tooltip text lives in `frontend/src/constants.js` → `TOOLTIPS` object, keyed by section (`kpi`, `team`, `chart`, `teams`, `modal`).
 - Settings-specific tooltip text (Refresh interval, At Risk threshold, Tasks in drill-down) lives inline in `views.jsx`.
+- **Source of truth (2026-07-06):** Tooltip copy is maintained in `docs/SLA_Dashboard_Tooltips.xlsx` — Column D ("Tooltip Text"). When updating any tooltip, the text in Column D is authoritative. Formatting must be preserved exactly as written in Column D: same line breaks, spacing, punctuation, and capitalisation. Do not paraphrase or normalise whitespace.
 
 #### Tooltip Z-Index / Stacking Rule (2026-06-15 — MANDATORY)
 

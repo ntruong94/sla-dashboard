@@ -434,7 +434,7 @@ const Sparkline = ({ data, color }) => {
 };
 
 // ===== ALERTS VIEW — full feed =====
-const AlertsView = ({ alerts, onDismiss }) => {
+const AlertsView = ({ alerts, onDismiss, maxTasks = 10 }) => {
   const critical = alerts.filter(a => a.severity === 'critical');
   const warning = alerts.filter(a => a.severity === 'warning');
 
@@ -455,7 +455,7 @@ const AlertsView = ({ alerts, onDismiss }) => {
           <div style={{color:'var(--ink-muted)',fontSize:10}}>No active alerts. All teams operating within thresholds.</div>
         </div>
       ) : (
-        <AlertsPanel alerts={alerts} onDismiss={onDismiss} drillMode="table"/>
+        <AlertsPanel alerts={alerts} onDismiss={onDismiss} drillMode="table" maxTasks={maxTasks}/>
       )}
     </main>
   );
