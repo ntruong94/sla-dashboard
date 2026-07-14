@@ -30,6 +30,22 @@ function fmtHMS(hours) {
 
 const DEFAULT_SETTINGS = { targets: {}, groupOrder: [], hiddenTeams: [], refreshMin: 5, atRiskPct: 87.5, modalTaskCount: 50, loanTargets: { received: 10, approved: 10, settled: 10 } };
 
+// One-time migration: convert any legacy integer team IDs in hiddenTeams/groupOrder to stable
+// team names. Returns [migratedSettings, wasMigrated]. Safe to call on every load — returns the
+// original object unchanged when no migration is needed.
+function migrateSettingsToNames(settings, teams) {
+  const lh = settings.hiddenTeams || [];
+  const lo = settings.groupOrder  || [];
+  const hasLegacy = [...lh, ...lo].some(x => typeof x === 'number');
+  if (!hasLegacy) return [settings, false];
+  const idToName = new Map(teams.map(t => [t.id, t.name]));
+  return [{
+    ...settings,
+    hiddenTeams: lh.map(x => typeof x === 'string' ? x : idToName.get(x)).filter(Boolean),
+    groupOrder:  lo.map(x => typeof x === 'string' ? x : idToName.get(x)).filter(Boolean),
+  }, true];
+}
+
 // Merge an API-returned global settings object with DEFAULT_SETTINGS.
 // Used after every getGlobalSettings() call to guarantee all expected keys exist.
 function mergeGlobalSettings(gs) {
@@ -261,9 +277,16 @@ export default function App() {
         settingsRef.current = currentSettings;
         setSettings(currentSettings);
         const targets = currentSettings.targets || {};
-        const hiddenSet = new Set(currentSettings.hiddenTeams || []);
         return getTeams(targets).then(teamsData => {
-          const visibleIds = teamsData.filter(t => !hiddenSet.has(t.id)).map(t => t.id);
+          // Migrate legacy integer IDs → names (one-time auto-fix, persists to DB)
+          const [effectiveSettings, wasMigrated] = migrateSettingsToNames(currentSettings, teamsData);
+          if (wasMigrated) {
+            settingsRef.current = effectiveSettings;
+            setSettings(effectiveSettings);
+            saveGlobalSettings(effectiveSettings).catch(() => {});
+          }
+          const hiddenNames = new Set(effectiveSettings.hiddenTeams || []);
+          const visibleIds = teamsData.filter(t => !hiddenNames.has(t.name)).map(t => t.id);
           return Promise.all([
             getKpiSummary(targets, visibleIds),
             Promise.resolve(teamsData),
@@ -300,9 +323,16 @@ export default function App() {
         settingsRef.current = currentSettings;
         setSettings(currentSettings);
         const targets = currentSettings.targets || {};
-        const hiddenSet = new Set(currentSettings.hiddenTeams || []);
         return getTeams(targets).then(teamsData => {
-          const visibleIds = teamsData.filter(t => !hiddenSet.has(t.id)).map(t => t.id);
+          // Migrate legacy integer IDs → names (one-time auto-fix, persists to DB)
+          const [effectiveSettings, wasMigrated] = migrateSettingsToNames(currentSettings, teamsData);
+          if (wasMigrated) {
+            settingsRef.current = effectiveSettings;
+            setSettings(effectiveSettings);
+            saveGlobalSettings(effectiveSettings).catch(() => {});
+          }
+          const hiddenNames = new Set(effectiveSettings.hiddenTeams || []);
+          const visibleIds = teamsData.filter(t => !hiddenNames.has(t.name)).map(t => t.id);
           return Promise.all([
             getKpiSummary(targets, visibleIds),
             Promise.resolve(teamsData),
@@ -442,25 +472,43 @@ export default function App() {
   const modalTasksByTeam = useMemo(() => groupTasksByTeam(modalRawTasks, settings), [modalRawTasks, settings]);
   const teamsDisplay = useMemo(() => {
     const hidden = new Set(settings.hiddenTeams || []);
+    // hidden may contain names (new) or IDs (legacy) — accept both
     const display = teams
-      .filter(team => !hidden.has(team.id))
+      .filter(team => !hidden.has(team.name) && !hidden.has(team.id))
       .map(team => {
-        const customTarget = settings.targets[team.id];
+        // targets keyed by name (new) or ID (legacy) — accept both
+        const customTarget = settings.targets[team.name] ?? settings.targets[team.id];
         return customTarget ? { ...team, target: customTarget } : team;
       });
     const order = settings.groupOrder;
     if (!order || order.length === 0) return display;
-    const orderMap = new Map(order.map((id, idx) => [id, idx]));
-    return [...display].sort((a, b) => (orderMap.get(a.id) ?? Infinity) - (orderMap.get(b.id) ?? Infinity));
+    // order may contain names (new) or IDs (legacy) — try name first, then ID
+    const orderMap = new Map(order.map((nameOrId, idx) => [nameOrId, idx]));
+    return [...display].sort((a, b) => {
+      const ai = orderMap.get(a.name) ?? orderMap.get(a.id) ?? Infinity;
+      const bi = orderMap.get(b.name) ?? orderMap.get(b.id) ?? Infinity;
+      return ai - bi;
+    });
   }, [teams, settings.targets, settings.groupOrder, settings.hiddenTeams]);
   const alertsDisplay = useMemo(() => {
     const hidden = new Set(settings.hiddenTeams || []);
     const order = settings.groupOrder;
-    const filtered = alerts.filter(a => !hidden.has(a.queueId));
+    // Build queueId → name lookup so name-based order/hidden checks work on alerts
+    const queueIdToName = new Map(teams.map(t => [t.id, t.name]));
+    const filtered = alerts.filter(a => {
+      const name = queueIdToName.get(a.queueId);
+      return !hidden.has(a.queueId) && !(name && hidden.has(name));
+    });
     if (!order || order.length === 0) return filtered;
-    const orderMap = new Map(order.map((id, idx) => [id, idx]));
-    return [...filtered].sort((a, b) => (orderMap.get(a.queueId) ?? Infinity) - (orderMap.get(b.queueId) ?? Infinity));
-  }, [alerts, settings.groupOrder, settings.hiddenTeams]);
+    const orderMap = new Map(order.map((nameOrId, idx) => [nameOrId, idx]));
+    return [...filtered].sort((a, b) => {
+      const nameA = queueIdToName.get(a.queueId);
+      const ai = (nameA && orderMap.has(nameA)) ? orderMap.get(nameA) : (orderMap.get(a.queueId) ?? Infinity);
+      const nameB = queueIdToName.get(b.queueId);
+      const bi = (nameB && orderMap.has(nameB)) ? orderMap.get(nameB) : (orderMap.get(b.queueId) ?? Infinity);
+      return ai - bi;
+    });
+  }, [alerts, settings.groupOrder, settings.hiddenTeams, teams]);
   const modalTeam  = teamsDisplay.find(t => t.id === modalTeamId) ?? null;
   const modalTaskLimit = settings.modalTaskCount || 50;
   const modalTasks = modalTeam

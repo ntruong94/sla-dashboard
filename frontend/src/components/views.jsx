@@ -465,8 +465,13 @@ const AlertsView = ({ alerts, onDismiss, maxTasks = 10 }) => {
 const SettingsView = ({ teams, settings, onApply, onReset }) => {
   const makeDraft = (s) => ({
     targets:        { ...s.targets },
-    teamOrder:      Array.isArray(s.groupOrder) ? [...s.groupOrder] : [],
-    hiddenTeams:    Array.isArray(s.hiddenTeams) ? [...s.hiddenTeams] : [],
+    // Convert legacy ID-based groupOrder/hiddenTeams to name-based (stable across backend restarts)
+    teamOrder:      Array.isArray(s.groupOrder)
+      ? s.groupOrder.map(item => typeof item === 'string' ? item : (teams.find(t => t.id === item)?.name ?? null)).filter(Boolean)
+      : [],
+    hiddenTeams:    Array.isArray(s.hiddenTeams)
+      ? s.hiddenTeams.map(item => typeof item === 'string' ? item : (teams.find(t => t.id === item)?.name ?? null)).filter(Boolean)
+      : [],
     refreshMin:     s.refreshMin,
     atRiskPct:      s.atRiskPct,
     modalTaskCount: s.modalTaskCount,
@@ -492,24 +497,24 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
   const setLoanTarget = (key, val) =>
     setDraft(d => ({ ...d, loanTargets: { ...d.loanTargets, [key]: val } }));
 
-  const removeTeam = (id) =>
+  const removeTeam = (name) =>
     setDraft(d => ({
       ...d,
-      hiddenTeams: [...(d.hiddenTeams || []), id],
-      teamOrder:   (d.teamOrder || []).filter(tid => tid !== id),
+      hiddenTeams: [...(d.hiddenTeams || []), name],
+      teamOrder:   (d.teamOrder || []).filter(n => n !== name),
     }));
 
-  const restoreTeam = (id) =>
-    setDraft(d => ({ ...d, hiddenTeams: (d.hiddenTeams || []).filter(tid => tid !== id) }));
+  const restoreTeam = (name) =>
+    setDraft(d => ({ ...d, hiddenTeams: (d.hiddenTeams || []).filter(n => n !== name) }));
 
   // Ordered team list for the drag-and-drop section (hidden teams excluded)
   const orderedDraftTeams = React.useMemo(() => {
     const hidden = new Set(draft.hiddenTeams || []);
-    const visible = teams.filter(t => !hidden.has(t.id));
+    const visible = teams.filter(t => !hidden.has(t.name) && !hidden.has(t.id));
     if (!draft.teamOrder || draft.teamOrder.length === 0) return visible;
-    const teamMap = new Map(visible.map(t => [t.id, t]));
-    const ordered   = draft.teamOrder.filter(id => teamMap.has(id)).map(id => teamMap.get(id));
-    const remaining = visible.filter(t => !draft.teamOrder.includes(t.id));
+    const teamMap = new Map(visible.map(t => [t.name, t]));
+    const ordered   = draft.teamOrder.filter(name => teamMap.has(name)).map(name => teamMap.get(name));
+    const remaining = visible.filter(t => !draft.teamOrder.includes(t.name));
     return [...ordered, ...remaining];
   }, [teams, draft.teamOrder, draft.hiddenTeams]);
 
@@ -518,9 +523,9 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
   const [draggingId, setDraggingId]     = React.useState(null);
   const [dragOverId, setDragOverId]     = React.useState(null);
 
-  const onDragStart = (e, id) => {
-    dragIdRef.current = id;
-    setDraggingId(id);
+  const onDragStart = (e, name) => {
+    dragIdRef.current = name;
+    setDraggingId(name);
     e.dataTransfer.effectAllowed = 'move';
   };
   const onDragEnd = () => {
@@ -528,25 +533,25 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
     setDragOverId(null);
     dragIdRef.current = null;
   };
-  const onDragOver = (e, id) => {
+  const onDragOver = (e, name) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    setDragOverId(id);
+    setDragOverId(name);
   };
-  const onDrop = (e, targetId) => {
+  const onDrop = (e, targetName) => {
     e.preventDefault();
-    const srcId = dragIdRef.current;
+    const srcName = dragIdRef.current;
     setDraggingId(null);
     setDragOverId(null);
     dragIdRef.current = null;
-    if (!srcId || srcId === targetId) return;
-    const currentIds = orderedDraftTeams.map(t => t.id);
-    const fromIdx = currentIds.indexOf(srcId);
-    const toIdx   = currentIds.indexOf(targetId);
+    if (!srcName || srcName === targetName) return;
+    const currentNames = orderedDraftTeams.map(t => t.name);
+    const fromIdx = currentNames.indexOf(srcName);
+    const toIdx   = currentNames.indexOf(targetName);
     if (fromIdx === -1 || toIdx === -1) return;
-    const newOrder = [...currentIds];
+    const newOrder = [...currentNames];
     newOrder.splice(fromIdx, 1);
-    newOrder.splice(toIdx, 0, srcId);
+    newOrder.splice(toIdx, 0, srcName);
     setDraft(d => ({ ...d, teamOrder: newOrder }));
   };
 
@@ -640,15 +645,15 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
 
         <div className="settings-grid">
           {orderedDraftTeams.map(t => (
-            <div key={t.id} className="setting-row"
+            <div key={t.name} className="setting-row"
               draggable
-              onDragStart={e => onDragStart(e, t.id)}
+              onDragStart={e => onDragStart(e, t.name)}
               onDragEnd={onDragEnd}
-              onDragOver={e => onDragOver(e, t.id)}
-              onDrop={e => onDrop(e, t.id)}
+              onDragOver={e => onDragOver(e, t.name)}
+              onDrop={e => onDrop(e, t.name)}
               style={{
-                opacity:    draggingId === t.id ? 0.45 : 1,
-                outline:    dragOverId === t.id && draggingId !== t.id ? '2px solid var(--brand)' : 'none',
+                opacity:    draggingId === t.name ? 0.45 : 1,
+                outline:    dragOverId === t.name && draggingId !== t.name ? '2px solid var(--brand)' : 'none',
                 transition: 'opacity 0.12s',
                 cursor:     'grab',
               }}
@@ -673,7 +678,7 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
                   <span className="setting-unit">hours</span>
                 </div>
                 <button
-                  onClick={() => removeTeam(t.id)}
+                  onClick={() => removeTeam(t.name)}
                   title={`Hide ${t.name} from all dashboard views`}
                   style={{padding:'4px 10px',background:'transparent',border:'1px solid var(--bad)',borderRadius:6,fontSize:11,fontWeight:700,cursor:'pointer',color:'var(--bad)',flexShrink:0,letterSpacing:'0.04em'}}
                 >REMOVE</button>
@@ -689,11 +694,11 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
           <h2 className="section-title" style={{marginBottom:4}}>Hidden Teams</h2>
           <div className="section-sub" style={{marginBottom:18}}>These teams are hidden across all dashboard views. Click Restore to show them again.</div>
           <div className="settings-grid">
-            {(draft.hiddenTeams || []).map(id => {
-              const t = teams.find(t => t.id === id);
+            {(draft.hiddenTeams || []).map(name => {
+              const t = teams.find(t => t.name === name) || teams.find(t => String(t.id) === String(name));
               if (!t) return null;
               return (
-                <div key={id} className="setting-row">
+                <div key={name} className="setting-row">
                   <div className="setting-meta">
                     <span style={{width:8,height:24,borderRadius:2,background:TEAM_COLORS[t.name],opacity:0.4}}/>
                     <div>
@@ -702,7 +707,7 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
                     </div>
                   </div>
                   <button
-                    onClick={() => restoreTeam(id)}
+                    onClick={() => restoreTeam(name)}
                     style={{padding:'4px 12px',background:'var(--surface-2)',border:'1px solid var(--line)',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer',color:'var(--ink)',flexShrink:0}}
                   >Restore</button>
                 </div>
