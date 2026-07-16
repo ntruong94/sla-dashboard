@@ -457,7 +457,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   margin: 0 0 2px;
 }
 .card-dept {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--ink-muted);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -493,7 +493,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 }
 .stat { min-width: 0; }
 .stat-label {
-  font-size: 12px;
+  font-size: 9px;
   color: var(--ink-muted);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -973,7 +973,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   background: var(--bg-elev);
   border-radius: var(--r-xl);
   box-shadow: var(--shadow-3);
-  width: min(1080px, 100%);
+  width: 95vw;
   max-height: 90vh;
   display: flex;
   flex-direction: column;
@@ -1018,11 +1018,11 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 
 .modal-chips {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 8px;
 }
 .chip {
-  padding: 12px 14px;
+  padding: 10px 12px;
   background: var(--bg-sunken);
   border-radius: var(--r-md);
   border: 1px solid transparent;

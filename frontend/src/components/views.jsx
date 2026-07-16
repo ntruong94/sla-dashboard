@@ -2,7 +2,7 @@ import React from 'react';
 import { Icon } from './icons.jsx';
 import { HistoryChart } from './history-chart.jsx';
 import { AlertsPanel, InfoTip } from './components.jsx';
-import { fmtHMS } from './utils.js';
+import { fmtHMS, useSortState, sortRows, parseDMY, SortTh } from './utils.js';
 import { TEAM_COLORS, slaClass, slaLabel, TOOLTIPS } from '../constants.js';
 import { activeTeams } from '../chartUtils.js';
 import { getAdminUsers, deleteAdminUser, getStaffDepartments, getStaffAbsentToday, getStaffByDepartment, getTaskCodes } from '../api.js';
@@ -11,6 +11,17 @@ import { getAdminUsers, deleteAdminUser, getStaffDepartments, getStaffAbsentToda
 
 // ===== TEAMS VIEW — full team listing with extended metrics =====
 const TeamsView = ({ teams, onOpenTeam }) => {
+  const [sort, cycleSort] = useSortState();
+  const sorted = React.useMemo(() => sortRows(teams, sort.col, sort.dir, (t, col) => {
+    if (col === 'name')    return t.name    || '';
+    if (col === 'dept')    return t.dept    || '';
+    if (col === 'volume')  return t.volume   ?? 0;
+    if (col === 'avgTat')  return t.avgTat   ?? 0;
+    if (col === 'target')  return t.target   ?? 0;
+    if (col === 'overdue') return t.overdue  ?? 0;
+    if (col === 'sla' || col === 'status') return t.sla ?? 0;
+    return '';
+  }), [teams, sort]);
   return (
     <main className="content">
       <div className="page-head">
@@ -25,18 +36,18 @@ const TeamsView = ({ teams, onOpenTeam }) => {
         <table className="teams-table">
           <thead>
             <tr>
-              <th>Team</th>
-              <th>Department</th>
-              <th style={{textAlign:'right'}}>Volume</th>
-              <th style={{textAlign:'right'}}>Avg TAT</th>
-              <th style={{textAlign:'right'}}>Target</th>
-              <th style={{textAlign:'right'}}>Overdue</th>
-              <th style={{width: 220}}>SLA Compliance</th>
-              <th style={{textAlign:'right', width: 100}}>Status<InfoTip text={TOOLTIPS.teams.status}/></th>
+              <SortTh sortKey="name"   sort={sort} onSort={cycleSort}>Team</SortTh>
+              <SortTh sortKey="dept"   sort={sort} onSort={cycleSort}>Department</SortTh>
+              <SortTh sortKey="volume" sort={sort} onSort={cycleSort} style={{textAlign:'center'}}>Volume</SortTh>
+              <SortTh sortKey="avgTat" sort={sort} onSort={cycleSort} style={{textAlign:'center'}}>Avg TAT</SortTh>
+              <SortTh sortKey="target" sort={sort} onSort={cycleSort} style={{textAlign:'center'}}>Target</SortTh>
+              <SortTh sortKey="overdue" sort={sort} onSort={cycleSort} style={{textAlign:'center', whiteSpace:'normal'}}>Overdue (only Active tasks)</SortTh>
+              <SortTh sortKey="sla"    sort={sort} onSort={cycleSort} style={{width: 220}}>SLA% (only Completed tasks)</SortTh>
+              <SortTh sortKey="status" sort={sort} onSort={cycleSort} style={{textAlign:'right', width: 100}}>Status<InfoTip text={TOOLTIPS.teams.status}/></SortTh>
             </tr>
           </thead>
           <tbody>
-            {teams.map(t => {
+            {sorted.map(t => {
               const cls = slaClass(t.sla);
               return (
                 <tr key={t.id} onClick={() => onOpenTeam(t.id)} style={{cursor:'pointer'}}>
@@ -46,11 +57,11 @@ const TeamsView = ({ teams, onOpenTeam }) => {
                       <strong>{t.name}</strong>
                     </div>
                   </td>
-                  <td><span className="dept-tag" style={{background:`color-mix(in srgb, ${TEAM_COLORS[t.name]} 20%, transparent)`,color:`color-mix(in srgb, ${TEAM_COLORS[t.name]} 80%, #000)`}}>{t.dept}</span></td>
-                  <td style={{textAlign:'right'}}>{t.volume}</td>
-                  <td style={{textAlign:'right', fontWeight: 500, color: t.avgTat > t.target ? undefined : 'var(--ink)'}} className={t.avgTat > t.target ? 'danger-text' : ''}>{fmtHMS(t.avgTat)}</td>
-                  <td style={{textAlign:'right'}} className="soft">{t.target}h</td>
-                  <td style={{textAlign:'right'}} className={t.overdue > 0 ? 'danger-text' : 'soft'}>{t.overdue}</td>
+                  <td><span className="dept-tag" style={{background:`color-mix(in srgb, ${TEAM_COLORS[t.name]} 20%, transparent)`,color:`color-mix(in srgb, ${TEAM_COLORS[t.name]} 80%, #000)`,fontSize:9}}>{t.fallbackDeptId ? 'Department Group' : 'KPI Group'}</span></td>
+                  <td style={{textAlign:'center'}}>{t.volume}</td>
+                  <td style={{textAlign:'center'}}>{fmtHMS(t.avgTat)}</td>
+                  <td style={{textAlign:'center'}}>{t.target}h</td>
+                  <td style={{textAlign:'center'}}>{t.overdue}</td>
                   <td>
                     <div style={{display:'flex',alignItems:'center',gap:10}}>
                       <div className="progress" style={{flex:1}}>
@@ -59,7 +70,7 @@ const TeamsView = ({ teams, onOpenTeam }) => {
                       <span style={{width:42,textAlign:'right',fontSize:12,fontWeight:600}}>{t.sla}%</span>
                     </div>
                   </td>
-                  <td style={{textAlign:'right'}}>
+                  <td style={{textAlign:'right', whiteSpace:'nowrap'}}>
                     <span className={`badge ${cls}`}><span className="badge-dot"/>{slaLabel(t.sla)}</span>
                   </td>
                 </tr>
@@ -76,6 +87,9 @@ const TeamsView = ({ teams, onOpenTeam }) => {
 const TasksView = ({ teams, tasks }) => {
   const [filterTeam, setFilterTeam] = React.useState('all');
   const [filterStatus, setFilterStatus] = React.useState('all');
+  const [searchTaskId, setSearchTaskId] = React.useState('');
+  const [searchAppId, setSearchAppId]   = React.useState('');
+  const [sort, cycleSort] = useSortState();
 
   const allTasks = React.useMemo(() => {
     const out = [];
@@ -85,10 +99,33 @@ const TasksView = ({ teams, tasks }) => {
     return out;
   }, [teams]);
 
-  const filtered = allTasks.filter(t =>
-    (filterTeam === 'all' || t.teamId === filterTeam) &&
-    (filterStatus === 'all' || t.status === filterStatus)
-  );
+  const filtered = allTasks.filter(t => {
+    if (filterTeam !== 'all' && t.teamId !== filterTeam) return false;
+    if (filterStatus !== 'all' && t.status !== filterStatus) return false;
+    if (searchTaskId.trim()) {
+      if (!(t.id || '').toLowerCase().includes(searchTaskId.trim().toLowerCase())) return false;
+    }
+    if (searchAppId.trim()) {
+      if (!String(t.appId ?? '').includes(searchAppId.trim())) return false;
+    }
+    return true;
+  });
+  const sorted = sortRows(filtered, sort.col, sort.dir, (t, col) => {
+    if (col === 'id')        return parseInt((t.id||'').replace('T-',''),10)||0;
+    if (col === 'appId')     return t.appId       ?? null;
+    if (col === 'createDte') return parseDMY(t.createDte);
+    if (col === 'slaAdj')    return parseDMY(t.slaAdjustedDte);
+    if (col === 'desc')      return t.desc        || '';
+    if (col === 'slaHours')  return t.slaInHours  ?? null;
+    if (col === 'onHold')    return t.onHoldHours ?? null;
+    if (col === 'onTask')    return t.onTaskHours  ?? null;
+    if (col === 'current')   return t.taskStatus  || '';
+    if (col === 'team')      return t.teamName    || '';
+    if (col === 'status')    return ({bad:0,warn:1,ok:2}[t.status] ?? 3);
+    if (col === 'tat')       return t.tatHours    ?? 0;
+    if (col === 'priority')  return ({high:0,med:1,low:2}[t.priority] ?? 3);
+    return '';
+  });
 
   const counts = {
     all: allTasks.length,
@@ -104,6 +141,22 @@ const TasksView = ({ teams, tasks }) => {
           <div className="crumb">Operations</div>
           <h1 className="page-title">All Active Tasks</h1>
           <div className="page-sub">{filtered.length} of {allTasks.length} tasks · live from So Ezy</div>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'flex-end',paddingBottom:4}}>
+          <input
+            type="text"
+            placeholder="Search Task ID"
+            value={searchTaskId}
+            onChange={e => setSearchTaskId(e.target.value)}
+            style={{padding:'7px 12px',fontSize:13,borderRadius:8,border:'1px solid var(--line)',background:'var(--bg-elev)',color:'var(--ink)',outline:'none',width:130}}
+          />
+          <input
+            type="text"
+            placeholder="Search App ID"
+            value={searchAppId}
+            onChange={e => setSearchAppId(e.target.value)}
+            style={{padding:'7px 12px',fontSize:13,borderRadius:8,border:'1px solid var(--line)',background:'var(--bg-elev)',color:'var(--ink)',outline:'none',width:110}}
+          />
         </div>
       </div>
 
@@ -138,26 +191,29 @@ const TasksView = ({ teams, tasks }) => {
         <table className="task-table">
           <thead>
             <tr>
-              <th style={{width:90}}>Task ID</th>
-              <th style={{width:100}}>App ID</th>
-              <th style={{width:100}}>Create Dte</th>
-              <th style={{width:120}}>SLAAdjusted Dte</th>
-              <th>Description</th>
-              <th style={{width:110}}>Current</th>
-              <th style={{width:130}}>Team</th>
-              <th style={{width:90}}>Status</th>
-              <th style={{width:180}}>TAT vs Target</th>
-              <th style={{width:80}}>Priority</th>
+              <SortTh sortKey="id"        sort={sort} onSort={cycleSort} style={{width:90}}>Task ID</SortTh>
+              <SortTh sortKey="appId"     sort={sort} onSort={cycleSort} style={{width:100}}>App ID</SortTh>
+              <SortTh sortKey="createDte" sort={sort} onSort={cycleSort} style={{width:100, whiteSpace:'normal'}}>Create Dte</SortTh>
+              <SortTh sortKey="slaAdj"    sort={sort} onSort={cycleSort} style={{width:110, whiteSpace:'normal'}}>SLAAdjusted Dte</SortTh>
+              <SortTh sortKey="desc"      sort={sort} onSort={cycleSort} style={{width:'25%'}}>Description</SortTh>
+              <SortTh sortKey="slaHours"  sort={sort} onSort={cycleSort} style={{width:65, whiteSpace:'normal'}}>SLA (hours)</SortTh>
+              <SortTh sortKey="onHold"    sort={sort} onSort={cycleSort} style={{width:70, whiteSpace:'normal'}}>On hold (hours)</SortTh>
+              <SortTh sortKey="onTask"    sort={sort} onSort={cycleSort} style={{width:70, whiteSpace:'normal'}}>On task (hours)</SortTh>
+              <SortTh sortKey="current"   sort={sort} onSort={cycleSort} style={{width:110}}>Current</SortTh>
+              <SortTh sortKey="team"      sort={sort} onSort={cycleSort} style={{width:120}}>Team</SortTh>
+              <SortTh sortKey="status"    sort={sort} onSort={cycleSort} style={{width:90}}>Status</SortTh>
+              <SortTh sortKey="tat"       sort={sort} onSort={cycleSort} style={{width:160}}>TAT vs Target</SortTh>
+              <SortTh sortKey="priority"  sort={sort} onSort={cycleSort} style={{width:70}}>Priority</SortTh>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan="10" style={{textAlign:'center',padding:48,color:'var(--ink-muted)'}}>No tasks match the current filter.</td></tr>
-            ) : filtered.map(t => {
+              <tr><td colSpan="13" style={{textAlign:'center',padding:48,color:'var(--ink-muted)'}}>No tasks match the current filter.</td></tr>
+            ) : sorted.map(t => {
               const rowCls = t.status === 'bad' ? 'overdue-row' : t.status === 'warn' ? 'risk-row' : 'on-track-row';
               const statusLabel = t.status === 'ok' ? 'On Track' : t.status === 'warn' ? 'At Risk' : 'Overdue';
               const prioLabel = t.priority === 'high' ? 'High' : t.priority === 'med' ? 'Med' : 'Low';
-              const pct = Math.min(t.tatHours / t.target, 1.6);
+              const pct = t.tatHours != null ? Math.min(t.tatHours / t.target, 1.6) : 0;
               return (
                 <tr key={t.teamId + '-' + t.id} className={rowCls}>
                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.id}</span></td>
@@ -174,6 +230,9 @@ const TasksView = ({ teams, tasks }) => {
                     <div className="task-desc-main">{t.desc}</div>
                     <div className="task-client">{t.client}</div>
                   </td>
+                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.slaInHours != null ? t.slaInHours : '-'}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.onHoldHours != null ? t.onHoldHours.toFixed(1) : '-'}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.onTaskHours != null ? t.onTaskHours.toFixed(1) : '-'}</span></td>
                   <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.taskStatus || '-'}</span></td>
                   <td style={{whiteSpace:'nowrap'}}>
                     <span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:12,fontWeight:500}}>
@@ -184,8 +243,14 @@ const TasksView = ({ teams, tasks }) => {
                   <td style={{whiteSpace:'nowrap'}}><span className={`pill ${t.status}`}><span className="pill-dot"/>{statusLabel}</span></td>
                   <td style={{whiteSpace:'nowrap'}}>
                     <div className="tat-cell">
-                      <div className="t"><span className="mono">{t.tatHours.toFixed(1)}h</span><span className="vs">/ {t.target}h</span></div>
-                      <div className="tat-bar"><div className={`progress-fill ${t.status}`} style={{width:`${Math.min(pct*100,100)}%`}}/></div>
+                      {t.tatHours != null ? (
+                        <>
+                          <div className="t"><span className="mono">{t.tatHours.toFixed(1)}h</span><span className="vs">/ {t.target}h target</span></div>
+                          <div className="tat-bar"><div className={`progress-fill ${t.status}`} style={{width:`${Math.min(pct*100,100)}%`}}/></div>
+                        </>
+                      ) : (
+                        <div className="t"><span className="vs" style={{marginLeft:'auto'}}>/ {t.target}h target</span></div>
+                      )}
                     </div>
                   </td>
                   <td style={{whiteSpace:'nowrap'}}>
@@ -208,6 +273,7 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
   // range: '7d' | '30d' | '90d' | { year, month }
   const [range, setRange] = React.useState('30d');
   const [comparePreset, setComparePreset] = React.useState('current'); // current | lastYear
+  const [statsSort, cycleStatsSort] = useSortState();
 
   const slice = React.useMemo(() => {
     if (!history) return null;
@@ -297,6 +363,14 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
     const delta = arr[arr.length - 1] - arr[0];
     return { team: t, avg, min, max, delta, arr };
   });
+  const sortedStats = sortRows(tableRows, statsSort.col, statsSort.dir, (r, col) => {
+    if (col === 'name')  return r.team.name || '';
+    if (col === 'avg')   return r.avg   ?? 0;
+    if (col === 'min')   return r.min   ?? 0;
+    if (col === 'max')   return r.max   ?? 0;
+    if (col === 'delta') return r.delta ?? 0;
+    return '';
+  });
 
   const isMonth = typeof range === 'object';
   const activeMonthKey = isMonth ? `${range.year}-${range.month}` : null;
@@ -380,16 +454,16 @@ const ReportsView = ({ teams, history, availableMonths, dimmedTeams, toggleDim }
         <table className="teams-table">
           <thead>
             <tr>
-              <th>Team</th>
-              <th style={{textAlign:'right'}}>7-day Avg</th>
-              <th style={{textAlign:'right'}}>Min</th>
-              <th style={{textAlign:'right'}}>Max</th>
-              <th style={{textAlign:'right'}}>Δ Mon → Sun</th>
+              <SortTh sortKey="name"  sort={statsSort} onSort={cycleStatsSort}>Team</SortTh>
+              <SortTh sortKey="avg"   sort={statsSort} onSort={cycleStatsSort} style={{textAlign:'right'}}>7-day Avg</SortTh>
+              <SortTh sortKey="min"   sort={statsSort} onSort={cycleStatsSort} style={{textAlign:'right'}}>Min</SortTh>
+              <SortTh sortKey="max"   sort={statsSort} onSort={cycleStatsSort} style={{textAlign:'right'}}>Max</SortTh>
+              <SortTh sortKey="delta" sort={statsSort} onSort={cycleStatsSort} style={{textAlign:'right'}}>Δ Mon → Sun</SortTh>
               <th style={{width:200}}>Trajectory</th>
             </tr>
           </thead>
           <tbody>
-            {tableRows.map(({team, avg, min, max, delta, arr}) => (
+            {sortedStats.map(({team, avg, min, max, delta, arr}) => (
               <tr key={team.id}>
                 <td>
                   <div style={{display:'flex',alignItems:'center',gap:10}}>
@@ -801,6 +875,9 @@ function StaffListView() {
   const [search, setSearch]           = React.useState('');
   const [drillDept, setDrillDept]     = React.useState(null); // { deptId, deptName } | null
   const [drillData, setDrillData]     = React.useState({ staff: [], loading: false, error: '' });
+  const [absentSort,  cycleAbsentSort]  = useSortState();
+  const [deptSort,    cycleDeptSort]    = useSortState();
+  const [staffSort,   cycleStaffSort]   = useSortState();
 
   const filtered = React.useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -861,6 +938,28 @@ function StaffListView() {
     };
   }, [drillDept, closeDrill]);
 
+  const sortedAbsent = sortRows(absentToday, absentSort.col, absentSort.dir, (r, col) => {
+    if (col === 'staffId') return r.staffId        ?? 0;
+    if (col === 'name')    return r.fullName        || '';
+    if (col === 'dept')    return r.departmentName  || '';
+    if (col === 'status')  return r.workStatusName  || '';
+    if (col === 'started') return r.startedTime    || '';
+    if (col === 'ended')   return r.endedTime       || '';
+    return '';
+  });
+  const sortedDepts = sortRows(filtered, deptSort.col, deptSort.dir, (d, col) => {
+    if (col === 'id')    return d.departmentId   ?? 0;
+    if (col === 'name')  return d.departmentName || '';
+    if (col === 'staff') return d.totalStaff     ?? 0;
+    return '';
+  });
+  const sortedStaff = sortRows(drillData.staff, staffSort.col, staffSort.dir, (s, col) => {
+    if (col === 'staffId') return s.staffId  ?? 0;
+    if (col === 'name')    return s.fullName || '';
+    if (col === 'isGroup') return s.isGroup ? 1 : 0;
+    return '';
+  });
+
   return (
     <main className="content">
       <div className="page-head">
@@ -914,16 +1013,16 @@ function StaffListView() {
               <table className="teams-table">
                 <thead>
                   <tr>
-                    <th>Staff ID</th>
-                    <th>Full Name</th>
-                    <th>Department Name</th>
-                    <th>Work Status Name</th>
-                    <th>StartedTime</th>
-                    <th>EndedTime</th>
+                    <SortTh sortKey="staffId" sort={absentSort} onSort={cycleAbsentSort}>Staff ID</SortTh>
+                    <SortTh sortKey="name"    sort={absentSort} onSort={cycleAbsentSort}>Full Name</SortTh>
+                    <SortTh sortKey="dept"    sort={absentSort} onSort={cycleAbsentSort}>Department Name</SortTh>
+                    <SortTh sortKey="status"  sort={absentSort} onSort={cycleAbsentSort}>Work Status Name</SortTh>
+                    <SortTh sortKey="started" sort={absentSort} onSort={cycleAbsentSort}>StartedTime</SortTh>
+                    <SortTh sortKey="ended"   sort={absentSort} onSort={cycleAbsentSort}>EndedTime</SortTh>
                   </tr>
                 </thead>
                 <tbody>
-                  {absentToday.map((r, idx) => (
+                  {sortedAbsent.map((r, idx) => (
                     <tr key={`${r.staffId}-${r.startedTime}-${idx}`}>
                       <td><span className="soft">{r.staffId}</span></td>
                       <td><strong>{r.fullName || '—'}</strong></td>
@@ -963,13 +1062,13 @@ function StaffListView() {
               <table className="teams-table">
                 <thead>
                   <tr>
-                    <th>Department ID</th>
-                    <th>Department Name</th>
-                    <th style={{ textAlign: 'right' }}>Total Staff Count</th>
+                    <SortTh sortKey="id"    sort={deptSort} onSort={cycleDeptSort}>Department ID</SortTh>
+                    <SortTh sortKey="name"  sort={deptSort} onSort={cycleDeptSort}>Department Name</SortTh>
+                    <SortTh sortKey="staff" sort={deptSort} onSort={cycleDeptSort} style={{ textAlign: 'right' }}>Total Staff Count</SortTh>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map(d => (
+                  {sortedDepts.map(d => (
                     <tr key={d.departmentId} onClick={() => openDrill(d)} style={{ cursor: 'pointer' }}>
                       <td><span className="soft">{d.departmentId}</span></td>
                       <td><strong>{d.departmentName || <em className="soft">—</em>}</strong></td>
@@ -1027,14 +1126,14 @@ function StaffListView() {
                 <table className="task-table">
                   <thead>
                     <tr>
-                      <th style={{ width: 100 }}>Staff ID</th>
-                      <th>Full Name</th>
+                      <SortTh sortKey="staffId" sort={staffSort} onSort={cycleStaffSort} style={{ width: 100 }}>Staff ID</SortTh>
+                      <SortTh sortKey="name"    sort={staffSort} onSort={cycleStaffSort}>Full Name</SortTh>
                       <th style={{ textAlign: 'center', width: 150 }}>Employee Status</th>
-                      <th style={{ textAlign: 'center', width: 100 }}>IsGroup</th>
+                      <SortTh sortKey="isGroup" sort={staffSort} onSort={cycleStaffSort} style={{ textAlign: 'center', width: 100 }}>IsGroup</SortTh>
                     </tr>
                   </thead>
                   <tbody>
-                    {drillData.staff.map(s => (
+                    {sortedStaff.map(s => (
                       <tr key={s.staffId}>
                         <td><span className="soft" style={{ fontSize: 12 }}>{s.staffId}</span></td>
                         <td><strong>{s.fullName || '—'}</strong></td>
@@ -1070,6 +1169,7 @@ function TaskCodesView() {
   const [fInactive, setFInactive] = React.useState('');
   const [fKpi,      setFKpi]      = React.useState('');
   const [fGrp,      setFGrp]      = React.useState('');
+  const [sort, cycleSort] = useSortState();
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -1095,6 +1195,18 @@ function TaskCodesView() {
       return true;
     });
   }, [rows, fCode, fName, fInactive, fKpi, fGrp]);
+  const sortedFiltered = sortRows(filtered, sort.col, sort.dir, (r, col) => {
+    if (col === 'id')       return r.ConfigTaskId    ?? 0;
+    if (col === 'code')     return r.TaskCode        || '';
+    if (col === 'funcId')   return r.FunctionID      ?? 0;
+    if (col === 'funcName') return r.FunctionName    || '';
+    if (col === 'name')     return r.TaskName        || '';
+    if (col === 'inactive') return r.Inactive ? 1 : 0;
+    if (col === 'sla')      return r.SLA             ?? null;
+    if (col === 'kpi')      return r.UsedForKPI      ?? null;
+    if (col === 'kpiGrp')   return r.SpecifiedKPIGrp || '';
+    return '';
+  });
 
   const inputStyle = { padding: '7px 12px', fontSize: 13, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--bg-elev)', color: 'var(--ink)', outline: 'none' };
   const selectStyle = { ...inputStyle, cursor: 'pointer' };
@@ -1152,19 +1264,19 @@ function TaskCodesView() {
               <table className="teams-table">
                 <thead>
                   <tr>
-                    <th>ConfigTaskId</th>
-                    <th>TaskCode</th>
-                    <th>FunctionID</th>
-                    <th>FunctionName</th>
-                    <th>TaskName</th>
-                    <th style={{ textAlign: 'center' }}>Inactive</th>
-                    <th style={{ textAlign: 'right' }}>SLA</th>
-                    <th style={{ textAlign: 'center' }}>UsedForKPI</th>
-                    <th>SpecifiedKPIGrp</th>
+                    <SortTh sortKey="id"       sort={sort} onSort={cycleSort}>ConfigTaskId</SortTh>
+                    <SortTh sortKey="code"     sort={sort} onSort={cycleSort}>TaskCode</SortTh>
+                    <SortTh sortKey="funcId"   sort={sort} onSort={cycleSort}>FunctionID</SortTh>
+                    <SortTh sortKey="funcName" sort={sort} onSort={cycleSort}>FunctionName</SortTh>
+                    <SortTh sortKey="name"     sort={sort} onSort={cycleSort}>TaskName</SortTh>
+                    <SortTh sortKey="inactive" sort={sort} onSort={cycleSort} style={{ textAlign: 'center' }}>Inactive</SortTh>
+                    <SortTh sortKey="sla"      sort={sort} onSort={cycleSort} style={{ textAlign: 'right' }}>SLA</SortTh>
+                    <SortTh sortKey="kpi"      sort={sort} onSort={cycleSort} style={{ textAlign: 'center' }}>UsedForKPI</SortTh>
+                    <SortTh sortKey="kpiGrp"   sort={sort} onSort={cycleSort}>SpecifiedKPIGrp</SortTh>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((r, i) => (
+                  {sortedFiltered.map((r, i) => (
                     <tr key={`${r.ConfigTaskId}-${i}`}>
                       <td><span className="soft">{r.ConfigTaskId}</span></td>
                       <td><strong>{r.TaskCode || '—'}</strong></td>
@@ -1205,6 +1317,7 @@ function AdminView() {
   const [loading, setLoading] = React.useState(true);
   const [error, setError]     = React.useState('');
   const [removing, setRemoving] = React.useState(null); // userId being removed
+  const [sort, cycleSort] = useSortState();
 
   const load = React.useCallback(() => {
     setLoading(true);
@@ -1229,6 +1342,13 @@ function AdminView() {
     approved: { background: 'color-mix(in srgb, var(--ok)   18%, transparent)', color: 'var(--ok)',   fontWeight: 600 },
     rejected: { background: 'color-mix(in srgb, var(--bad)  18%, transparent)', color: 'var(--bad)',  fontWeight: 600 },
   };
+  const sortedUsers = sortRows(users, sort.col, sort.dir, (u, col) => {
+    if (col === 'email')  return u.email     || '';
+    if (col === 'role')   return u.role      || '';
+    if (col === 'joined') return u.createdAt || '';
+    if (col === 'status') return u.status    || '';
+    return '';
+  });
 
   return (
     <main className="content">
@@ -1270,15 +1390,15 @@ function AdminView() {
             <table className="teams-table">
               <thead>
                 <tr>
-                  <th>Email</th>
-                  <th>Role</th>
-                  <th>Joined</th>
-                  <th style={{ textAlign: 'center' }}>Status</th>
+                  <SortTh sortKey="email"  sort={sort} onSort={cycleSort}>Email</SortTh>
+                  <SortTh sortKey="role"   sort={sort} onSort={cycleSort}>Role</SortTh>
+                  <SortTh sortKey="joined" sort={sort} onSort={cycleSort}>Joined</SortTh>
+                  <SortTh sortKey="status" sort={sort} onSort={cycleSort} style={{ textAlign: 'center' }}>Status</SortTh>
                   <th style={{ textAlign: 'center' }}>Action</th>
                 </tr>
               </thead>
               <tbody>
-                {users.map(u => (
+                {sortedUsers.map(u => (
                   <tr key={u.id}>
                     <td><strong>{u.email}</strong></td>
                     <td><span className="dept-tag">{u.role}</span></td>

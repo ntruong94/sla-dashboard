@@ -2,11 +2,11 @@
 import '../styles.css';
 import '../styles-views.css';
 import MezyIconDark from './MezyIcon_Dark';
-import { getKpiSummary, getTeams, getTasks, getHistory, getAlerts, getLoanSummary, getLoanDetail, getGlobalSettings, saveGlobalSettings } from './api';
+import { getKpiSummary, getTeams, getTasks, getHistory, getAlerts, getLoanSummary, getLoanDetail, getUserSettings, putUserSettings, getGlobalSettings, saveGlobalSettings } from './api';
 import { Icon } from './components/icons.jsx';
 import { KpiTile, TeamCard, AlertsPanel, TaskModal, InfoTip, LoanKpiTile, LoanModal } from './components/components.jsx';
 import { TrendChart } from './components/trend.jsx';
-import { TeamsView, TasksView, ReportsView, AlertsView, SettingsView, StaffListView, AdminView, TaskCodesView } from './components/views.jsx';
+import { TeamsView, TasksView, ReportsView, AlertsView, SettingsView, StaffListView, AdminView } from './components/views.jsx';
 import { TEAM_COLORS, TOOLTIPS } from './constants.js';
 import { isWeekend, activeTeams, fmtAxisLabel } from './chartUtils.js';
 import Mezylogin from './Mezylogin.jsx';
@@ -21,56 +21,69 @@ function fmtDelta(val, unit = '') {
 }
 
 function fmtHMS(hours) {
-  const totalSec = Math.round(Math.abs(hours ?? 0) * 3600);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  const totalMin = Math.round(Math.abs(hours ?? 0) * 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${h}:${String(m).padStart(2, '0')}`;
 }
 
-const DEFAULT_SETTINGS = { targets: {}, groupOrder: [], hiddenTeams: [], refreshMin: 5, atRiskPct: 87.5, modalTaskCount: 50, loanTargets: { received: 10, approved: 10, settled: 10 } };
+const DEFAULT_SETTINGS = { targets: {}, refreshMin: 5, atRiskPct: 87.5, modalTaskCount: 50, loanTargets: { received: 10, approved: 10, settled: 10 }, hiddenTeams: [], groupOrder: [] };
 
-// One-time migration: convert any legacy integer team IDs in hiddenTeams/groupOrder to stable
-// team names. Returns [migratedSettings, wasMigrated]. Safe to call on every load — returns the
-// original object unchanged when no migration is needed.
-function migrateSettingsToNames(settings, teams) {
-  const lh = settings.hiddenTeams || [];
-  const lo = settings.groupOrder  || [];
-  const hasLegacy = [...lh, ...lo].some(x => typeof x === 'number');
-  if (!hasLegacy) return [settings, false];
-  const idToName = new Map(teams.map(t => [t.id, t.name]));
-  return [{
-    ...settings,
-    hiddenTeams: lh.map(x => typeof x === 'string' ? x : idToName.get(x)).filter(Boolean),
-    groupOrder:  lo.map(x => typeof x === 'string' ? x : idToName.get(x)).filter(Boolean),
-  }, true];
+// Per-user localStorage key — isolates each user's settings on shared browsers.
+// Falls back to the legacy key when email is unavailable (e.g. before first login).
+function settingsKey(email) {
+  return email ? `sla_dash_settings_${email.toLowerCase().replace(/[^a-z0-9]/g, '_')}` : 'sla_dash_settings';
 }
 
-// Merge an API-returned global settings object with DEFAULT_SETTINGS.
-// Used after every getGlobalSettings() call to guarantee all expected keys exist.
-function mergeGlobalSettings(gs) {
-  if (!gs || typeof gs !== 'object') return { ...DEFAULT_SETTINGS };
-  return {
-    ...DEFAULT_SETTINGS,
-    ...gs,
-    targets:     { ...DEFAULT_SETTINGS.targets,     ...(gs.targets     || {}) },
-    groupOrder:  Array.isArray(gs.groupOrder)  ? gs.groupOrder  : [],
-    hiddenTeams: Array.isArray(gs.hiddenTeams) ? gs.hiddenTeams : [],
-    loanTargets: { ...DEFAULT_SETTINGS.loanTargets, ...(gs.loanTargets || {}) },
-  };
+// Load and merge settings from localStorage. Tries the per-user key first,
+// then falls back to the legacy single key so existing saved values are not lost.
+function loadSettingsFromStorage(email) {
+  try {
+    const raw = localStorage.getItem(settingsKey(email)) || localStorage.getItem('sla_dash_settings');
+    if (!raw) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_SETTINGS,
+      ...parsed,
+      targets:     { ...DEFAULT_SETTINGS.targets,     ...(parsed.targets     || {}) },
+      loanTargets: { ...DEFAULT_SETTINGS.loanTargets, ...(parsed.loanTargets || {}) },
+    };
+  } catch { return DEFAULT_SETTINGS; }
 }
 
 function normalizeTask(t, settings = {}) {
-  // Use RealtimeTAT (DATEDIFF computed in SQL) when available; fall back to stored TotalHoursOnTask.
-  const tatH    = t.RealtimeTAT != null ? t.RealtimeTAT : (t.TotalHoursOnTask ?? 0);
-  // Use the team-level SLA target (from Settings, else 4h default).
-  // Per-task t.SLAInHours varies by task type and must NOT be used here — it causes
-  // the status badge and the progress bar to evaluate against different targets.
+  // TAT = TotalHoursOnTask; null = blank display and excluded from all TAT calcs.
+  // Target (TAT bar + at-risk warn) = team's configured SLA target from Settings; default 4h.
+  const tatH    = t.TotalHoursOnTask ?? null;
   const slaH    = settings.targets?.[t.QueueId] || 4;
   const atRisk  = (settings.atRiskPct ?? 87.5) / 100;
-  const pct     = slaH > 0 ? tatH / slaH : 0;
-  const status  = pct > 1 ? 'bad' : pct >= atRisk ? 'warn' : 'ok';
-  
+  const pct     = (tatH != null && slaH > 0) ? tatH / slaH : 0;
+  const parseDMYLocal = s => { if (!s) return null; const [date, time='00:00:00'] = s.split(' '); const [d,m,y] = date.split('/'); return new Date(`${y}-${m}-${d}T${time}`).getTime(); };
+  let status;
+  if (tatH == null || tatH === 0) {
+    status = 'ok';
+  } else if (!t.CompletedDte) {
+    // Active task — new canonical overdue rule:
+    // Overdue if TotalHoursOnTask > per-task SLAInHours, OR current time > SLAAdjustedDate (when set)
+    const taskSlaH = t.SLAInHours != null ? Number(t.SLAInHours) : null;
+    const cond1    = taskSlaH != null && taskSlaH > 0 && tatH > taskSlaH;
+    const adjTs    = parseDMYLocal(t.SLAAdjustedDte);
+    const cond2    = adjTs != null && Date.now() > adjTs;
+    if (cond1 || cond2)    { status = 'bad';  }
+    else if (pct >= atRisk){ status = 'warn'; }
+    else                   { status = 'ok';   }
+  } else {
+    // Completed task (SLA% badge click drill-through)
+    // Overdue: TotalHoursOnTask > SLAInHours (per-task, when non-null), OR DateCompleted > SLAAdjustedDate
+    const taskSlaH = t.SLAInHours != null ? Number(t.SLAInHours) : null;
+    const adjTs    = parseDMYLocal(t.SLAAdjustedDte);
+    const compTs   = parseDMYLocal(t.CompletedDte);
+    const cCond1   = tatH != null && taskSlaH != null && taskSlaH > 0 && tatH > taskSlaH;
+    const cCond2   = adjTs != null && compTs != null && compTs > adjTs;
+    if (cCond1 || cCond2) { status = 'bad'; }
+    else                  { status = pct >= atRisk ? 'warn' : 'ok'; }
+  }
+
   // Prefer a real person name; AssignedTo can point at a staff group like "Settlement Team".
   const isLoanStatusTeam = t.QueueId === 5 || t.QueueId === 6;
   const assignedStaffName = (!t.AssignedToIsGroup && t.StaffFullName && t.StaffFullName.trim()) ? t.StaffFullName.trim() : '';
@@ -84,20 +97,32 @@ function normalizeTask(t, settings = {}) {
     ? (loanStatusDetail || t.ShortDescription || '-')
     : (t.TaskName || t.ClientName || t.AssignedToName || '-');
   
+  // Completed tasks display TAT: TotalHoursOnTask (primary) or DATEDIFF(SLAAdjustedDate, CompletedDate) (fallback)
+  let displayTatH = tatH;
+  if (t.CompletedDte && tatH === null && t.SLAAdjustedDte) {
+    const adjTsF  = parseDMYLocal(t.SLAAdjustedDte);
+    const compTsF = parseDMYLocal(t.CompletedDte);
+    if (adjTsF != null && compTsF != null) displayTatH = (compTsF - adjTsF) / 3600000;
+  }
+
   return {
     id:       `T-${t.TaskID}`,
-    appId:    t.ApplicationID ?? null,
-    taskStatus: t.TaskStatus || '',
     desc,
     client,
     status,
-    tatHours: tatH,
+    tatHours: t.CompletedDte ? displayTatH : tatH,
     priority: t.Priority === 'high' ? 'high' : t.Priority === 'med' ? 'med' : 'low',
     target:   slaH,
     teamId:   t.QueueId,
     teamName: t.QueueName,
     createDte:      t.CreateDte || null,
     slaAdjustedDte: t.SLAAdjustedDte || null,
+    completedDte:   t.CompletedDte || null,
+    appId:          t.ApplicationID != null ? t.ApplicationID : null,
+    taskStatus:     t.TaskStatus || null,
+    onHoldHours:    t.TotalHoursOnHold != null ? Math.round(parseFloat(t.TotalHoursOnHold) * 10) / 10 : null,
+    onTaskHours:    t.TotalHoursOnTask != null ? Math.round(parseFloat(t.TotalHoursOnTask) * 10) / 10 : null,
+    slaInHours:     t.SLAInHours != null ? Number(t.SLAInHours) : null,
   };
 }
 
@@ -166,27 +191,6 @@ function getStoredUser() {
   try { return JSON.parse(localStorage.getItem('sla_user') || '{}'); } catch { return {}; }
 }
 
-// Per-user settings key — isolates settings across different accounts on the same browser.
-function settingsKey(email) {
-  return email ? `sla_dash_settings_${email}` : 'sla_dash_settings';
-}
-
-function loadSettings(email) {
-  try {
-    const saved = localStorage.getItem(settingsKey(email));
-    if (!saved) return DEFAULT_SETTINGS;
-    const parsed = JSON.parse(saved);
-    return {
-      ...DEFAULT_SETTINGS,
-      ...parsed,
-      targets:     { ...DEFAULT_SETTINGS.targets,     ...(parsed.targets     || {}) },
-      groupOrder:  Array.isArray(parsed.groupOrder)   ? parsed.groupOrder    : [],
-      hiddenTeams: Array.isArray(parsed.hiddenTeams)  ? parsed.hiddenTeams   : [],
-      loanTargets: { ...DEFAULT_SETTINGS.loanTargets, ...(parsed.loanTargets || {}) },
-    };
-  } catch { return DEFAULT_SETTINGS; }
-}
-
 // â”€â”€â”€ Root App â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export default function App() {
@@ -194,16 +198,45 @@ export default function App() {
   const [authed, setAuthed]   = useState(() => !!localStorage.getItem('sla_token'));
   const [userRole, setUserRole] = useState(() => getStoredUser().role || 'viewer');
 
-  const handleLogin  = useCallback((token, user) => {
+  const handleLogin  = useCallback(async (token, user) => {
     localStorage.setItem('sla_token', token);
     localStorage.setItem('sla_user', JSON.stringify(user));
     setUserRole(user.role || 'viewer');
     setError('');
+    // Determine settings for this user:
+    // 1. Start with the localStorage cache (fast, synchronous — no flicker).
+    // 2. Sync from the DB (source of truth) so cross-device and post-clear scenarios
+    //    always restore the last saved config.
+    // settingsRef is updated BEFORE setAuthed(true) so the [authed] data-load effect
+    // always reads the correct settings on its first run — no race condition.
+    let loaded = loadSettingsFromStorage(user.email);
+    try {
+      const dbSettings = await getUserSettings();
+      if (dbSettings && Object.keys(dbSettings).length > 0) {
+        loaded = {
+          ...DEFAULT_SETTINGS,
+          ...dbSettings,
+          targets:     { ...DEFAULT_SETTINGS.targets,     ...(dbSettings.targets     || {}) },
+          loanTargets: { ...DEFAULT_SETTINGS.loanTargets, ...(dbSettings.loanTargets || {}) },
+        };
+        // Refresh localStorage cache with the authoritative DB value.
+        localStorage.setItem(settingsKey(user.email), JSON.stringify(loaded));
+      }
+    } catch (e) {
+      console.warn('[settings] backend sync failed on login — using local cache:', e.message);
+    }
+    settingsRef.current = loaded;
+    setSettings(loaded);
+    // Load global team config (admin-controlled; applies to ALL users).
+    // Must complete before setAuthed(true) so the first render uses the correct team set.
+    try {
+      const globalCfg = await getGlobalSettings();
+      globalTeamConfigRef.current = globalCfg;
+      setGlobalTeamConfig(globalCfg);
+    } catch (e) {
+      console.warn('[global-config] load failed on login:', e.message);
+    }
     setLoading(true);
-    // Settings will be loaded from the global DB store in useEffect([authed]).
-    // Use DEFAULT_SETTINGS as the temporary placeholder until the API responds.
-    settingsRef.current = DEFAULT_SETTINGS;
-    setSettings(DEFAULT_SETTINGS);
     setAuthed(true);
   }, []);
   const handleLogout = useCallback(() => {
@@ -227,31 +260,36 @@ export default function App() {
   const [modalRawTasks, setModalRawTasks] = useState([]);
   const [history, setHistory]         = useState(null);
   const [alerts, setAlerts]           = useState([]);
-  const [loanSummary, setLoanSummary] = useState({ received: { count: 0, amount: 0, deltas: { count: 0, amount: 0 } }, approved: { count: 0, amount: 0, deltas: { count: 0, amount: 0 } }, settled: { count: 0, amount: 0, deltas: { count: 0, amount: 0 } } });
+  const [loanSummary, setLoanSummary] = useState({ received: { count: 0, amount: 0, deltas: { count: 0, amount: 0 }, deltas5: { count: 0, amount: 0 } }, approved: { count: 0, amount: 0, deltas: { count: 0, amount: 0 }, deltas5: { count: 0, amount: 0 } }, settled: { count: 0, amount: 0, deltas: { count: 0, amount: 0 }, deltas5: { count: 0, amount: 0 } } });
   const [loading, setLoading]         = useState(true);
   const [error, setError]             = useState('');
   const [dimmedTeams, setDimmed]      = useState(new Set());
-  const [modalTeamId, setModalTeamId] = useState(null);
-  const [modalDrillData, setModalDrillData] = useState({ tasks: [], loading: false, error: null });
+  const [modalTeamId, setModalTeamId]   = useState(null);
+  const [slaModalTeamId, setSlaModalTeamId] = useState(null);
+  const [slaRawTasks, setSlaRawTasks]       = useState([]);
+  const [slaTasksLoading, setSlaTasksLoading] = useState(false);
   const [loanModal, setLoanModal]     = useState(null); // { type, label } | null
   const [loanDetail, setLoanDetail]   = useState({ data: [], loading: false, error: null });
-  const [settings, setSettings]       = useState(() => {
-    const { email } = getStoredUser();
-    return loadSettings(email);
-  });
+  const [settings, setSettings]         = useState(() => loadSettingsFromStorage(getStoredUser().email));
+  const [globalTeamConfig, setGlobalTeamConfig] = useState({ hiddenTeams: [], groupOrder: [], version: 0 });
 
   // Watermark — fixed to viewport centre, no parallax
   const watermarkRef = useRef(null);
   // Refs for stable values used inside callbacks that must not change on every render
-  const settingsRef = useRef(settings);
-  const teamsRef    = useRef([]);
+  const settingsRef         = useRef(settings);
+  const teamsRef            = useRef([]);
+  const globalTeamConfigRef = useRef({ hiddenTeams: [], groupOrder: [], version: 0 });
+  const userRoleRef         = useRef(userRole);
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { teamsRef.current = teams; },    [teams]);
+  useEffect(() => { globalTeamConfigRef.current = globalTeamConfig; }, [globalTeamConfig]);
+  useEffect(() => { userRoleRef.current = userRole; }, [userRole]);
 
-  // Safety-net: always persist settings to localStorage whenever they change.
-  // Writes to the current user's own key so settings are isolated per account.
+  // Safety-net: always persist settings to the per-user localStorage key whenever
+  // they change. Belt-and-suspenders for the explicit writes in applySettings.
+  // Never removes the key — only adds/updates. handleLogout does NOT touch any settings key.
   useEffect(() => {
-    const { email } = getStoredUser();
+    const email = getStoredUser().email;
     try { localStorage.setItem(settingsKey(email), JSON.stringify(settings)); } catch (e) {
       console.warn('[settings] Failed to persist to localStorage:', e.message);
     }
@@ -267,36 +305,18 @@ export default function App() {
     return () => clearInterval(t);
   }, []);
 
-  // Shared refresh function — re-fetches global settings (so non-admin users pick up
-  // admin changes within the refresh interval) then all live data.
+  // Shared refresh function — reads targets from settingsRef so the interval
+  // always uses the latest configured values without recreating on every settings change.
   const refreshData = useCallback(() => {
-    getGlobalSettings()
-      .then(mergeGlobalSettings)
-      .catch(() => settingsRef.current || DEFAULT_SETTINGS)
-      .then(currentSettings => {
-        settingsRef.current = currentSettings;
-        setSettings(currentSettings);
-        const targets = currentSettings.targets || {};
-        return getTeams(targets).then(teamsData => {
-          // Migrate legacy integer IDs → names (one-time auto-fix, persists to DB)
-          const [effectiveSettings, wasMigrated] = migrateSettingsToNames(currentSettings, teamsData);
-          if (wasMigrated) {
-            settingsRef.current = effectiveSettings;
-            setSettings(effectiveSettings);
-            saveGlobalSettings(effectiveSettings).catch(() => {});
-          }
-          const hiddenNames = new Set(effectiveSettings.hiddenTeams || []);
-          const visibleIds = teamsData.filter(t => !hiddenNames.has(t.name)).map(t => t.id);
-          return Promise.all([
-            getKpiSummary(targets, visibleIds),
-            Promise.resolve(teamsData),
-            getTasks(),
-            getTasks(null, null, 'today'),
-            getAlerts(targets),
-            getLoanSummary(),
-          ]);
-        });
-      })
+    const targets = settingsRef.current?.targets || {};
+    Promise.all([
+      getKpiSummary(targets),
+      getTeams(targets),
+      getTasks(),
+      getTasks(null, null, 'today'),
+      getAlerts(targets),
+      getLoanSummary(),
+    ])
       .then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {
         setKpi(kpiData);
         setTeams(teamsData);
@@ -311,38 +331,26 @@ export default function App() {
       .catch(err => console.warn('[auto-refresh] failed:', err.message));
   }, []);
 
-  // Initial data load — fetches global settings from DB first (source of truth for all users),
-  // then loads all live data using the correct admin-configured targets.
-  // history is decoupled (slow cold-scan) and won’t block KPI/teams.
+  // Initial data load — uses saved targets from settingsRef so the first render
+  // reflects any user-configured SLA targets, not hardcoded defaults.
+  // history is decoupled (slow cold-scan) and won't block KPI/teams.
   useEffect(() => {
     if (!authed) { setLoading(false); return; }
+    // Load global team config non-blocking (covers page-refresh-with-existing-token case).
     getGlobalSettings()
-      .then(mergeGlobalSettings)
-      .catch(() => settingsRef.current || DEFAULT_SETTINGS)
-      .then(currentSettings => {
-        settingsRef.current = currentSettings;
-        setSettings(currentSettings);
-        const targets = currentSettings.targets || {};
-        return getTeams(targets).then(teamsData => {
-          // Migrate legacy integer IDs → names (one-time auto-fix, persists to DB)
-          const [effectiveSettings, wasMigrated] = migrateSettingsToNames(currentSettings, teamsData);
-          if (wasMigrated) {
-            settingsRef.current = effectiveSettings;
-            setSettings(effectiveSettings);
-            saveGlobalSettings(effectiveSettings).catch(() => {});
-          }
-          const hiddenNames = new Set(effectiveSettings.hiddenTeams || []);
-          const visibleIds = teamsData.filter(t => !hiddenNames.has(t.name)).map(t => t.id);
-          return Promise.all([
-            getKpiSummary(targets, visibleIds),
-            Promise.resolve(teamsData),
-            getTasks(),
-            getTasks(null, null, 'today'),
-            getAlerts(targets),
-            getLoanSummary(),
-          ]);
-        });
-      })
+      .then(cfg => { globalTeamConfigRef.current = cfg; setGlobalTeamConfig(cfg); })
+      .catch(() => {});
+    // Read targets from ref — already initialised with the lazy-loaded settings
+    // value so this is always the persisted user config, never the bare default.
+    const targets = settingsRef.current?.targets || {};
+    Promise.all([
+      getKpiSummary(targets),
+      getTeams(targets),
+      getTasks(),
+      getTasks(null, null, 'today'),
+      getAlerts(targets),
+      getLoanSummary(),
+    ])
       .then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {
         setKpi(kpiData);
         setTeams(teamsData);
@@ -354,9 +362,9 @@ export default function App() {
         setJustRefreshed(true);
         setTimeout(() => setJustRefreshed(false), 800);
         setLoading(false);
-        // Load history separately — won’t block dashboard if slow or fails
-        getHistory('400d', settingsRef.current?.targets || {})
-          .then(historyData => setHistory(normalizeHistory(historyData, teamsRef.current)))
+        // Load history separately — won't block dashboard if slow or fails
+        getHistory('400d', targets)
+          .then(historyData => setHistory(normalizeHistory(historyData, teamsData)))
           .catch(err => console.warn('[history] failed to load:', err.message));
       })
       .catch(err => {
@@ -373,18 +381,29 @@ export default function App() {
     return () => clearInterval(t);
   }, [settings.refreshMin, refreshData]);
 
+  // Poll global team config every 15 s — lightweight version check.
+  // When admin saves changes the version increments; all sessions recompute
+  // teamsDisplay (and derived KPIs/alerts) within 15 s, no page reload needed.
+  useEffect(() => {
+    if (!authed) return;
+    const iv = setInterval(() => {
+      getGlobalSettings()
+        .then(cfg => {
+          if (cfg.version !== globalTeamConfigRef.current.version) {
+            globalTeamConfigRef.current = cfg;
+            setGlobalTeamConfig(cfg);
+          }
+        })
+        .catch(() => {});
+    }, 15000);
+    return () => clearInterval(iv);
+  }, [authed]);
+
   const toggleDim    = useCallback(id => setDimmed(prev => {
     const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next;
   }), []);
   const dismissAlert  = useCallback(id => setAlerts(prev => prev.filter(a => a.id !== id)), []);
-  const closeModal    = useCallback(() => { setModalTeamId(null); setModalDrillData({ tasks: [], loading: false, error: null }); }, []);
-  const openModal     = useCallback((teamId) => {
-    setModalTeamId(teamId);
-    setModalDrillData({ tasks: [], loading: true, error: null });
-    getTasks(teamId, null, 'today')
-      .then(data => setModalDrillData({ tasks: data, loading: false, error: null }))
-      .catch(err  => setModalDrillData({ tasks: [], loading: false, error: err.message }));
-  }, []);
+  const closeModal    = useCallback(() => setModalTeamId(null), []);
   const openLoanModal = useCallback((type, label) => {
     setLoanModal({ type, label });
     setLoanDetail({ data: [], loading: true, error: null });
@@ -393,29 +412,43 @@ export default function App() {
       .catch(err  => setLoanDetail({ data: [], loading: false, error: err.message }));
   }, []);
   const closeLoanModal = useCallback(() => setLoanModal(null), []);
-  const applySettings = useCallback(async (newSettings) => {
-    // Save to DB as global config — admin-only. Throws on failure so SettingsView shows the error.
-    await saveGlobalSettings(newSettings);
-    // Update local cache
-    const { email } = getStoredUser();
+  const openSlaModal  = useCallback((teamId) => {
+    setSlaModalTeamId(teamId);
+    setSlaRawTasks([]);
+    setSlaTasksLoading(true);
+    getTasks(teamId, 'completed', 'today')
+      .then(data => { setSlaRawTasks(data); setSlaTasksLoading(false); })
+      .catch(() => setSlaTasksLoading(false));
+  }, []);
+  const closeSlaModal = useCallback(() => setSlaModalTeamId(null), []);
+  const applySettings = useCallback((newSettings) => {
+    const email = getStoredUser().email;
     try { localStorage.setItem(settingsKey(email), JSON.stringify(newSettings)); } catch {}
+    // Persist to backend DB (source of truth). Fire-and-forget — never blocks the UI.
+    putUserSettings(newSettings).catch(err => console.warn('[settings] backend save failed:', err.message));
     // Update ref BEFORE setSettings so refreshData reads the new targets immediately
     settingsRef.current = newSettings;
     setSettings(newSettings);
+    // Admin: persist team order + hidden teams as global config so ALL sessions
+    // update within 15 s (polling detects the incremented version).
+    if (userRoleRef.current === 'admin') {
+      saveGlobalSettings({
+        hiddenTeams: newSettings.hiddenTeams || [],
+        groupOrder:  newSettings.groupOrder  || [],
+      })
+        .then(cfg => { globalTeamConfigRef.current = cfg; setGlobalTeamConfig(cfg); })
+        .catch(err => console.warn('[global-config] save failed:', err.message));
+    }
     // Immediately re-fetch all SLA-affected data with the new targets
     const targets = newSettings.targets || {};
-    const hiddenSet = new Set(newSettings.hiddenTeams || []);
-    getTeams(targets).then(teamsData => {
-      const visibleIds = teamsData.filter(t => !hiddenSet.has(t.id)).map(t => t.id);
-      return Promise.all([
-        getKpiSummary(targets, visibleIds),
-        Promise.resolve(teamsData),
-        getTasks(),
-        getTasks(null, null, 'today'),
-        getAlerts(targets),
-        getLoanSummary(),
-      ]);
-    }).then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {
+    Promise.all([
+      getKpiSummary(targets),
+      getTeams(targets),
+      getTasks(),
+      getTasks(null, null, 'today'),
+      getAlerts(targets),
+      getLoanSummary(),
+    ]).then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {
       setKpi(kpiData);
       setTeams(teamsData);
       setRawTasks(tasksData);
@@ -430,39 +463,20 @@ export default function App() {
       .catch(err => console.warn('[settings history refresh] failed:', err.message));
   }, []);
   const resetSettings = useCallback(() => {
-    // Reset DB global settings (fire-and-forget; state update is immediate).
-    saveGlobalSettings(DEFAULT_SETTINGS).catch(err =>
-      console.warn('[settings] Failed to reset in DB:', err.message)
-    );
-    const { email } = getStoredUser();
+    const email = getStoredUser().email;
+    // Remove the per-user key AND the legacy key so all read paths start clean.
     try { localStorage.removeItem(settingsKey(email)); } catch {}
+    try { localStorage.removeItem('sla_dash_settings'); } catch {}
     settingsRef.current = DEFAULT_SETTINGS;
     setSettings(DEFAULT_SETTINGS);
-    // Re-fetch data for all teams — DEFAULT_SETTINGS has no hiddenTeams or custom targets,
-    // so KPI/cards/charts must update to include every team again immediately.
-    const targets = DEFAULT_SETTINGS.targets || {};
-    getTeams(targets).then(teamsData => {
-      // All teams are visible after a reset — no visibleTeams filter needed.
-      return Promise.all([
-        getKpiSummary(targets),
-        Promise.resolve(teamsData),
-        getTasks(),
-        getTasks(null, null, 'today'),
-        getAlerts(targets),
-        getLoanSummary(),
-      ]);
-    }).then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {
-      setKpi(kpiData);
-      setTeams(teamsData);
-      setRawTasks(tasksData);
-      setModalRawTasks(modalTasksData);
-      setAlerts(alertsData);
-      setLoanSummary(loanData);
-      setLastRefresh(new Date());
-    }).catch(err => console.warn('[settings reset] refresh failed:', err.message));
-    getHistory('400d', targets)
-      .then(historyData => setHistory(normalizeHistory(historyData, teamsRef.current)))
-      .catch(err => console.warn('[settings reset history] failed:', err.message));
+    // Clear backend settings so the next login also starts from defaults.
+    putUserSettings({}).catch(() => {});
+    // Admin: also reset global team config so all sessions revert to natural order.
+    if (userRoleRef.current === 'admin') {
+      saveGlobalSettings({ hiddenTeams: [], groupOrder: [] })
+        .then(cfg => { globalTeamConfigRef.current = cfg; setGlobalTeamConfig(cfg); })
+        .catch(() => {});
+    }
   }, []);
 
   const { dayLabels, trendData }  = useMemo(() => build7DayTrend(history), [history]);
@@ -470,50 +484,80 @@ export default function App() {
   // Settings-aware derived state — recomputes automatically when settings or raw data changes
   const tasksByTeam  = useMemo(() => groupTasksByTeam(rawTasks, settings), [rawTasks, settings]);
   const modalTasksByTeam = useMemo(() => groupTasksByTeam(modalRawTasks, settings), [modalRawTasks, settings]);
+  // Filter hidden teams, apply custom targets, then apply saved display order.
+  // All downstream views (team cards, charts, tables, task filter, reports) consume
+  // teamsDisplay — so hiding/restoring a team propagates immediately everywhere.
   const teamsDisplay = useMemo(() => {
-    const hidden = new Set(settings.hiddenTeams || []);
-    // hidden may contain names (new) or IDs (legacy) — accept both
+    const hidden = new Set(globalTeamConfig.hiddenTeams || []);
     const display = teams
-      .filter(team => !hidden.has(team.name) && !hidden.has(team.id))
+      .filter(t => !hidden.has(t.name))
       .map(team => {
-        // targets keyed by name (new) or ID (legacy) — accept both
-        const customTarget = settings.targets[team.name] ?? settings.targets[team.id];
+        const customTarget = settings.targets[team.id];
         return customTarget ? { ...team, target: customTarget } : team;
       });
-    const order = settings.groupOrder;
-    if (!order || order.length === 0) return display;
-    // order may contain names (new) or IDs (legacy) — try name first, then ID
-    const orderMap = new Map(order.map((nameOrId, idx) => [nameOrId, idx]));
-    return [...display].sort((a, b) => {
-      const ai = orderMap.get(a.name) ?? orderMap.get(a.id) ?? Infinity;
-      const bi = orderMap.get(b.name) ?? orderMap.get(b.id) ?? Infinity;
-      return ai - bi;
-    });
-  }, [teams, settings.targets, settings.groupOrder, settings.hiddenTeams]);
-  const alertsDisplay = useMemo(() => {
-    const hidden = new Set(settings.hiddenTeams || []);
-    const order = settings.groupOrder;
-    // Build queueId → name lookup so name-based order/hidden checks work on alerts
-    const queueIdToName = new Map(teams.map(t => [t.id, t.name]));
-    const filtered = alerts.filter(a => {
-      const name = queueIdToName.get(a.queueId);
-      return !hidden.has(a.queueId) && !(name && hidden.has(name));
-    });
-    if (!order || order.length === 0) return filtered;
-    const orderMap = new Map(order.map((nameOrId, idx) => [nameOrId, idx]));
-    return [...filtered].sort((a, b) => {
-      const nameA = queueIdToName.get(a.queueId);
-      const ai = (nameA && orderMap.has(nameA)) ? orderMap.get(nameA) : (orderMap.get(a.queueId) ?? Infinity);
-      const nameB = queueIdToName.get(b.queueId);
-      const bi = (nameB && orderMap.has(nameB)) ? orderMap.get(nameB) : (orderMap.get(b.queueId) ?? Infinity);
-      return ai - bi;
-    });
-  }, [alerts, settings.groupOrder, settings.hiddenTeams, teams]);
+    const order = globalTeamConfig.groupOrder || [];
+    if (!order.length) return display;
+    const orderMap = new Map(order.map((name, i) => [name, i]));
+    return [...display].sort((a, b) =>
+      (orderMap.get(a.name) ?? Infinity) - (orderMap.get(b.name) ?? Infinity)
+    );
+  }, [teams, settings.targets, globalTeamConfig]);
+
+  // Derive KPI summary from visible teams only when any teams are hidden.
+  // Volume-weighted aggregation keeps KPI strip consistent with team cards.
+  // When no teams are hidden the backend value (kpi) is used directly.
+  // KPI tiles when teams are hidden: simple average of visible team card values,
+  // matching exactly what each visible card displays. totalTasks and totalOverdue
+  // are sums. TAT includes all visible teams in the denominator (teams showing 0:00
+  // contribute 0 — consistent with summing card values and dividing by card count).
+  // When no teams are hidden the backend kpi response is used directly.
+  const effectiveKpi = useMemo(() => {
+    if (!globalTeamConfig.hiddenTeams?.length) return kpi;
+    const vis = teamsDisplay;
+    if (!vis.length) return kpi;
+    const totalTasks   = vis.reduce((s, t) => s + (t.volume  || 0), 0);
+    const totalOverdue = vis.reduce((s, t) => s + (t.overdue || 0), 0);
+    const overallSla   = vis.reduce((s, t) => s + (t.sla     || 0), 0) / vis.length;
+    const avgTat       = vis.reduce((s, t) => s + (t.avgTat  || 0), 0) / vis.length;
+    // Deltas: prev = today − delta (server stores delta = today − prev)
+    const prevVol     = vis.reduce((s, t) => s + Math.max(0, (t.volume  || 0) - (t.deltas?.volume  || 0)), 0);
+    const prevOverdue = vis.reduce((s, t) => s + Math.max(0, (t.overdue || 0) - (t.deltas?.overdue || 0)), 0);
+    const prevSla     = vis.reduce((s, t) => s + ((t.sla || 0) - (t.deltas?.sla || 0)), 0) / vis.length;
+    const prevTat     = vis.reduce((s, t) => s + Math.max(0, (t.avgTat || 0) - (t.deltas?.avgTat || 0)), 0) / vis.length;
+    return {
+      totalTasks, overallSla, avgTat, totalOverdue,
+      deltas: {
+        totalTasks:   totalTasks - prevVol,
+        overallSla:   parseFloat((overallSla - prevSla).toFixed(2)),
+        avgTat:       avgTat - prevTat,
+        totalOverdue: totalOverdue - prevOverdue,
+        today:        kpi.deltas?.today,
+        prevBizDay:   kpi.deltas?.prevBizDay,
+      },
+    };
+  }, [teamsDisplay, kpi, globalTeamConfig.hiddenTeams]);
+
+  // Alerts scoped to visible teams — hidden teams' alerts are suppressed immediately.
+  const visibleAlerts = useMemo(() => {
+    if (!globalTeamConfig.hiddenTeams?.length) return alerts;
+    const visIds = new Set(teamsDisplay.map(t => t.id));
+    return alerts.filter(a => visIds.has(a.queueId));
+  }, [alerts, teamsDisplay, globalTeamConfig.hiddenTeams]);
+
+  // For SettingsView: merge global team config into settings so the admin always
+  // initialises the team-order/hidden-teams draft from the live global config.
+  // Per-user settings (targets, refreshMin, etc.) are unaffected.
+  const adminSettings = useMemo(() => ({
+    ...settings,
+    hiddenTeams: globalTeamConfig.hiddenTeams || [],
+    groupOrder:  globalTeamConfig.groupOrder  || [],
+  }), [settings, globalTeamConfig]);
+
   const modalTeam  = teamsDisplay.find(t => t.id === modalTeamId) ?? null;
-  const modalTaskLimit = settings.modalTaskCount || 50;
-  const modalTasks = modalTeam
-    ? modalDrillData.tasks.map(t => normalizeTask(t, settings)).slice(0, modalTaskLimit)
-    : [];
+  const modalTaskLimit = modalTeam ? Math.min(settings.modalTaskCount, modalTeam.volume ?? settings.modalTaskCount) : settings.modalTaskCount;
+  const modalTasks = modalTeam ? (modalTasksByTeam[modalTeam.id] || []).slice(0, modalTaskLimit) : [];
+  const slaModalTeam  = teamsDisplay.find(t => t.id === slaModalTeamId) ?? null;
+  const slaModalTasks = useMemo(() => slaRawTasks.map(t => normalizeTask(t, settings)), [slaRawTasks, settings]);
 
   // AEST time strings
   const timeFmt    = now.toLocaleTimeString('en-AU', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Australia/Sydney' });
@@ -573,13 +617,6 @@ export default function App() {
           title="Staff List" onClick={() => setView('staff-list')}>
           <Icon name="staff-list" size={20}/>
         </button>
-
-        {userRole === 'admin' && (
-          <button className={`nav-item ${view === 'task-codes' ? 'active' : ''}`}
-            title="Task Codes List" onClick={() => setView('task-codes')}>
-            <Icon name="task-codes" size={20}/>
-          </button>
-        )}
 
         {userRole === 'admin' && (
           <button className={`nav-item ${view === 'admin' ? 'active' : ''}`}
@@ -645,6 +682,8 @@ export default function App() {
                 amount={loanSummary.received.amount}
                 countDelta={loanSummary.received.deltas.count}
                 amtDelta={loanSummary.received.deltas.amount}
+                countDelta5={loanSummary.received.deltas5?.count}
+                amtDelta5={loanSummary.received.deltas5?.amount}
                 target={settings.loanTargets?.received ?? 10}
                 onClick={() => openLoanModal('received', 'Application Received')}
                 tooltip={TOOLTIPS.loan.received}
@@ -655,6 +694,8 @@ export default function App() {
                 amount={loanSummary.approved.amount}
                 countDelta={loanSummary.approved.deltas.count}
                 amtDelta={loanSummary.approved.deltas.amount}
+                countDelta5={loanSummary.approved.deltas5?.count}
+                amtDelta5={loanSummary.approved.deltas5?.amount}
                 target={settings.loanTargets?.approved ?? 10}
                 onClick={() => openLoanModal('approved', 'Funder Approvals')}
                 tooltip={TOOLTIPS.loan.approved}
@@ -665,6 +706,8 @@ export default function App() {
                 amount={loanSummary.settled.amount}
                 countDelta={loanSummary.settled.deltas.count}
                 amtDelta={loanSummary.settled.deltas.amount}
+                countDelta5={loanSummary.settled.deltas5?.count}
+                amtDelta5={loanSummary.settled.deltas5?.amount}
                 target={settings.loanTargets?.settled ?? 10}
                 onClick={() => openLoanModal('settled', 'Settlements')}
                 tooltip={TOOLTIPS.loan.settled}
@@ -673,25 +716,25 @@ export default function App() {
 
             {/* KPI strip */}
             <section className="kpi-strip">
-              <KpiTile label="Total Active Tasks"  value={kpi.totalTasks}   icon="tasks-sm"
+              <KpiTile label="Total Active Tasks"  value={effectiveKpi.totalTasks}   icon="tasks-sm"
                 tooltip={TOOLTIPS.kpi.totalTasks} tooltipWidth={270}
-                delta={fmtDelta(kpi.deltas.totalTasks)}
-                deltaDir={kpi.deltas.totalTasks > 0 ? 'up' : kpi.deltas.totalTasks < 0 ? 'down' : null}
+                delta={fmtDelta(effectiveKpi.deltas.totalTasks)}
+                deltaDir={effectiveKpi.deltas.totalTasks > 0 ? 'up' : effectiveKpi.deltas.totalTasks < 0 ? 'down' : null}
                 accent={null}/>
-              <KpiTile label="Overall SLA %"       value={kpi.overallSla.toFixed(2)}   unit="%" icon="pct"
+              <KpiTile label="Overall SLA% (only Completed tasks)"       value={effectiveKpi.overallSla.toFixed(2)}   unit="%" icon="pct"
                 tooltip={TOOLTIPS.kpi.overallSla} tooltipWidth={300}
-                delta={fmtDelta(kpi.deltas.overallSla, '%')}
-                deltaDir={kpi.deltas.overallSla > 0 ? 'up' : kpi.deltas.overallSla < 0 ? 'down' : null}/>
+                delta={fmtDelta(effectiveKpi.deltas.overallSla, '%')}
+                deltaDir={effectiveKpi.deltas.overallSla > 0 ? 'up' : effectiveKpi.deltas.overallSla < 0 ? 'down' : null}/>
               <KpiTile label="Avg Turnaround"
-                value={fmtHMS(kpi.avgTat)}
+                value={fmtHMS(effectiveKpi.avgTat)}
                 icon="clock"
                 tooltip={TOOLTIPS.kpi.avgTat} tooltipWidth={260}
-                delta={kpi.deltas.avgTat != null && kpi.deltas.avgTat !== 0 ? `${kpi.deltas.avgTat > 0 ? '+' : '-'}${fmtHMS(kpi.deltas.avgTat)}` : '—'}
-                deltaDir={kpi.deltas.avgTat > 0 ? 'up' : kpi.deltas.avgTat < 0 ? 'down' : null}/>
-              <KpiTile label="Overdue / Breached"  value={kpi.totalOverdue} icon="hourglass"
+                delta={effectiveKpi.deltas.avgTat != null && effectiveKpi.deltas.avgTat !== 0 ? `${effectiveKpi.deltas.avgTat > 0 ? '+' : '-'}${fmtHMS(effectiveKpi.deltas.avgTat)}` : '—'}
+                deltaDir={effectiveKpi.deltas.avgTat > 0 ? 'up' : effectiveKpi.deltas.avgTat < 0 ? 'down' : null}/>
+              <KpiTile label="Overdue (only Active tasks)"  value={effectiveKpi.totalOverdue} icon="hourglass"
                 tooltip={TOOLTIPS.kpi.totalOverdue} tooltipWidth={270}
-                delta={fmtDelta(kpi.deltas.totalOverdue)}
-                deltaDir={kpi.deltas.totalOverdue > 0 ? 'up' : kpi.deltas.totalOverdue < 0 ? 'down' : null}
+                delta={fmtDelta(effectiveKpi.deltas.totalOverdue)}
+                deltaDir={effectiveKpi.deltas.totalOverdue > 0 ? 'up' : effectiveKpi.deltas.totalOverdue < 0 ? 'down' : null}
                 accent="bad"/>
             </section>
 
@@ -700,11 +743,11 @@ export default function App() {
               <div>
                 <div className="section-head">
                   <h2 className="section-title">Team Performance</h2>
-                  <span className="section-sub">click any card to drill in</span>
+                  <span className="section-sub">{teamsDisplay.length} operational teams &middot; click any card to drill in</span>
                 </div>
                 <div className="team-grid">
                   {teamsDisplay.map(t => (
-                    <TeamCard key={t.id} team={t} onClick={() => openModal(t.id)}/>
+                    <TeamCard key={t.id} team={t} onClick={() => setModalTeamId(t.id)} onSlaClick={() => openSlaModal(t.id)}/>
                   ))}
                 </div>
 
@@ -738,7 +781,7 @@ export default function App() {
                   </section>
                 )}
               </div>
-              <AlertsPanel alerts={alertsDisplay} onDismiss={dismissAlert}
+              <AlertsPanel alerts={visibleAlerts} onDismiss={dismissAlert}
                 atRiskPct={settings.atRiskPct} maxTasks={settings.modalTaskCount}
                 customTargets={settings.targets} enableDrillDown={false}/>
             </section>
@@ -746,7 +789,7 @@ export default function App() {
         )}
 
         {/* â”€â”€ Secondary views (each manages its own <main className="content">) â”€â”€ */}
-        {view === 'teams'   && <TeamsView teams={teamsDisplay} onOpenTeam={openModal}/>}
+        {view === 'teams'   && <TeamsView teams={teamsDisplay} onOpenTeam={setModalTeamId}/>}
         {view === 'tasks'   && <TasksView teams={teamsDisplay} tasks={modalTasksByTeam}/>}
         {view === 'reports' && (
           <ReportsView
@@ -757,16 +800,27 @@ export default function App() {
             toggleDim={toggleDim}
           />
         )}
-        {view === 'alerts'   && <AlertsView  alerts={alertsDisplay} onDismiss={dismissAlert} maxTasks={settings.modalTaskCount}/>}
-        {view === 'settings' && userRole === 'admin' && <SettingsView teams={teams} settings={settings} onApply={applySettings} onReset={resetSettings}/>}
+        {view === 'alerts'   && <AlertsView  alerts={visibleAlerts} onDismiss={dismissAlert}/>}
+        {view === 'settings' && userRole === 'admin' && <SettingsView teams={teams} settings={adminSettings} onApply={applySettings} onReset={resetSettings}/>}
         {view === 'staff-list' && <StaffListView />}
-        {view === 'task-codes' && userRole === 'admin' && <TaskCodesView />}
         {view === 'admin' && userRole === 'admin' && <AdminView />}
       </div>
 
       {/* Task drill-down modal */}
       {modalTeam && (
-        <TaskModal team={modalTeam} tasks={modalTasks} loading={modalDrillData.loading} onClose={closeModal} maxTasks={modalTaskLimit}/>
+        <TaskModal team={modalTeam} tasks={modalTasks} onClose={closeModal} maxTasks={modalTaskLimit}/>
+      )}
+
+      {/* SLA % completed-task drill-down modal */}
+      {slaModalTeam && (
+        <TaskModal
+          team={slaModalTeam}
+          tasks={slaModalTasks}
+          onClose={closeSlaModal}
+          taskLabel="Completed Tasks — Today"
+          loading={slaTasksLoading}
+          completedMode={true}
+        />
       )}
 
       {/* Loan drill-down modal */}

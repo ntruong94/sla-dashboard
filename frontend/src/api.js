@@ -136,3 +136,12 @@ export const saveGlobalSettings = (data) => request('/api/admin/settings', {
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(data),
 });
+
+// ── Per-user settings (backed by ConfigReportUsers.UserSettings in SQL Server) ─
+// Source of truth: the database. localStorage is used as a fast cache on startup.
+export const getUserSettings = () => request('/api/user/settings');
+export const putUserSettings = (settings) => request('/api/user/settings', {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(settings),
+});

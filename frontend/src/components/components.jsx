@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom';
 import { Icon } from './icons.jsx';
 import { slaClass, slaLabel, TOOLTIPS } from '../constants.js';
 import { getAlertTasks } from '../api.js';
-import { fmtHMS } from './utils.js';
+import { fmtHMS, useSortState, sortRows, parseDMY, SortTh } from './utils.js';
 
 // Team card + KPI strip + Alerts panel + Task modal
 
@@ -77,11 +77,19 @@ const KpiTile = ({ label, value, unit, delta, deltaDir, accent, icon, tooltip, t
 };
 
 // --- Team Card ---
-const TeamCard = ({ team, onClick }) => {
+const TeamCard = ({ team, onClick, onSlaClick }) => {
   const cls = slaClass(team.sla);
   const over = team.avgTat > team.target;
   const hasOverdue = team.overdue > 0;
   const d = team.deltas || { volume: 0, sla: 0, avgTat: 0, overdue: 0 };
+
+  const codes = (team.taskCodes || []).map(String);
+  const groupLabel = team.fallbackDeptId ? 'Department Group' : 'KPI Group';
+  const groupTooltip = team.fallbackDeptId
+    ? `All tasks from ${team.name} - Dept ${team.fallbackDeptId}`
+    : codes.length > 0
+      ? `${team.name} includes TaskcodeID:\n'${codes.length > 30 ? codes.slice(0, 30).join("', '") + `'\n... and ${codes.length - 30} more` : codes.join("', '")}'`
+      : `${team.name} - KPI Group`;
 
   const fmtD = (val, unit = '') => {
     if (val === 0 || val === null || val === undefined) return null;
@@ -94,13 +102,15 @@ const TeamCard = ({ team, onClick }) => {
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }}>
       <div className="card-head">
         <div>
-          <div className="card-dept" style={{fontSize:'9px'}}>{team.dept === 'KPI Group' ? 'KPI GROUP' : ''}</div>
-          <h3 className="card-team" style={{fontSize:'14px'}}>
-            {team.name}
-            {team.tooltip && <InfoTip text={team.tooltip} width={320}/>}
-          </h3>
+          <div className="card-dept">{groupLabel}</div>
+          <h3 className="card-team">{team.name}<InfoTip text={groupTooltip} width={280}/></h3>
         </div>
-        <span className={`badge ${cls}`}>
+        <span
+          className={`badge ${cls}`}
+          onClick={onSlaClick ? (e) => { e.stopPropagation(); onSlaClick(); } : undefined}
+          role={onSlaClick ? 'button' : undefined}
+          style={onSlaClick ? { cursor: 'pointer' } : undefined}
+        >
           <span className="badge-dot" />
           {team.sla}%
           <InfoTip text={TOOLTIPS.team.sla}/>
@@ -109,23 +119,23 @@ const TeamCard = ({ team, onClick }) => {
 
       <div className="card-stats">
         <div className="stat">
-          <div className="stat-label" style={{fontSize:'9px'}}>Volume<InfoTip text={TOOLTIPS.team.volume} width={230}/></div>
-          <div className="stat-value" style={{fontSize:'20px'}}>{team.volume}</div>
+          <div className="stat-label">Volume<InfoTip text={TOOLTIPS.team.volume} width={230}/></div>
+          <div className="stat-value">{team.volume}</div>
           {fmtD(d.volume) && (
             <div className="stat-delta neutral">{fmtD(d.volume)}</div>
           )}
         </div>
         <div className="stat">
-          <div className="stat-label" style={{fontSize:'9px'}}>Avg TAT<InfoTip text={TOOLTIPS.team.avgTat} width={250}/></div>
-          <div className="stat-value" style={{fontSize:'20px'}}>
+          <div className="stat-label">Avg TAT<InfoTip text={TOOLTIPS.team.avgTat} width={250}/></div>
+          <div className="stat-value">
             {fmtHMS(team.avgTat)}
           </div>
         </div>
         <div className="stat">
-          <div className="stat-label" style={{fontSize:'9px'}}>Overdue<InfoTip text={TOOLTIPS.team.overdue} width={260}/></div>
-          <div className={`stat-value ${hasOverdue ? 'danger' : ''}`} style={{fontSize:'20px', textAlign:'right', paddingRight:'20px'}}>{team.overdue}</div>
+          <div className="stat-label">Overdue<InfoTip text={TOOLTIPS.team.overdue} width={260}/></div>
+          <div className={`stat-value ${hasOverdue ? 'danger' : ''}`}>{team.overdue}</div>
           {fmtD(d.overdue) && (
-            <div className={`stat-delta ${d.overdue > 0 ? 'up' : 'down'}`} style={{textAlign:'right', paddingRight:'20px'}}>{fmtD(d.overdue)}</div>
+            <div className={`stat-delta ${d.overdue > 0 ? 'up' : 'down'}`}>{fmtD(d.overdue)}</div>
           )}
         </div>
       </div>
@@ -172,6 +182,122 @@ function splitAlertDesc(desc) {
   };
 }
 
+// Shared helpers for alert task rendering
+const normalizePriorityVal = (p) => {
+  const v = String(p || '').trim().toLowerCase();
+  if (v === 'high' || v === 'highest' || v === 'urgent' || v === 'h') return 'high';
+  if (v === 'med' || v === 'medium' || v === 'm') return 'med';
+  return 'low';
+};
+
+const alertStatusInfoVal = (taskType) => {
+  if (taskType === 'overdue') return { cls: 'bad', label: 'Overdue' };
+  return { cls: 'warn', label: 'At Risk' };
+};
+
+// Sortable drill-through table for alert tasks (handles its own sort state)
+const AlertDrillTable = ({ rows }) => {
+  const [sort, cycleSort] = useSortState();
+  const sorted = sortRows(rows, sort.col, sort.dir, (t, col) => {
+    if (col === 'id')        return t.TaskID ?? 0;
+    if (col === 'appId')     return t.ApplicationID ?? null;
+    if (col === 'createDte') return parseDMY(t.CreateDte);
+    if (col === 'slaAdj')    return parseDMY(t.SLAAdjustedDte);
+    if (col === 'desc')      return (t.StaffFullName?.trim()) || t.ShortDescription || '';
+    if (col === 'slaHours')  return t.SLAInHours != null ? Number(t.SLAInHours) : null;
+    if (col === 'onHold')    return t.TotalHoursOnHold ?? null;
+    if (col === 'onTask')    return t.TotalHoursOnTask ?? null;
+    if (col === 'current')   return t.TaskStatus || '';
+    if (col === 'status')    return t.taskType === 'overdue' ? 0 : 1;
+    if (col === 'tat')       return t.TotalHoursOnTask ?? t.TatHours ?? 0;
+    if (col === 'priority')  return ({high:0,med:1,low:2}[String(t.Priority||'').toLowerCase()] ?? 3);
+    return '';
+  });
+  return (
+    <table className="task-table">
+      <thead>
+        <tr>
+          <SortTh sortKey="id"        sort={sort} onSort={cycleSort} style={{width: '90px'}}>Task ID</SortTh>
+          <SortTh sortKey="appId"     sort={sort} onSort={cycleSort} style={{width: '100px'}}>App ID</SortTh>
+          <SortTh sortKey="createDte" sort={sort} onSort={cycleSort} style={{width: '100px', whiteSpace:'normal'}}>Create Dte</SortTh>
+          <SortTh sortKey="slaAdj"    sort={sort} onSort={cycleSort} style={{width: '110px', whiteSpace:'normal'}}>SLAAdjusted Dte</SortTh>
+          <SortTh sortKey="desc"      sort={sort} onSort={cycleSort} style={{width:'25%'}}>Description</SortTh>
+          <SortTh sortKey="slaHours"  sort={sort} onSort={cycleSort} style={{width: '65px', whiteSpace:'normal'}}>SLA (hours)</SortTh>
+          <SortTh sortKey="onHold"    sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On hold (hours)</SortTh>
+          <SortTh sortKey="onTask"    sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On task (hours)</SortTh>
+          <SortTh sortKey="current"   sort={sort} onSort={cycleSort} style={{width: '100px'}}>Current</SortTh>
+          <SortTh sortKey="status"    sort={sort} onSort={cycleSort} style={{width: '90px'}}>Status</SortTh>
+          <SortTh sortKey="tat"       sort={sort} onSort={cycleSort} style={{width: '160px'}}>TAT vs Target</SortTh>
+          <SortTh sortKey="priority"  sort={sort} onSort={cycleSort} style={{width: '70px'}}>Priority</SortTh>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map(t => {
+          const status = alertStatusInfoVal(t.taskType);
+          const target = t.TargetHours != null ? Number(t.TargetHours) : (t.SLAInHours != null ? Number(t.SLAInHours) : 0);
+          const tat = t.TotalHoursOnTask != null ? Number(t.TotalHoursOnTask) : (t.TatHours != null ? Number(t.TatHours) : null);
+          const pct = (tat != null && target > 0) ? Math.min(tat / target, 1.6) : 0;
+          const desc = (t.StaffFullName && t.StaffFullName.trim())
+            ? t.StaffFullName.trim()
+            : (t.ShortDescription || `Task #${t.TaskID}`);
+          const prio = normalizePriorityVal(t.Priority);
+          const prioLabel = prio === 'high' ? 'High' : prio === 'med' ? 'Med' : 'Low';
+          const rowCls = status.cls === 'bad' ? 'overdue-row' : 'risk-row';
+          return (
+            <tr key={t.TaskID + '-' + t.taskType} className={rowCls}>
+              <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TaskID}</span></td>
+              <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.ApplicationID != null ? t.ApplicationID : '-'}</span></td>
+              <td style={{whiteSpace:'nowrap'}}>
+                <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(t.CreateDte||'').split(' ')[0]||'-'}</div>
+                {t.CreateDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{t.CreateDte.split(' ')[1]}</div>}
+              </td>
+              <td style={{whiteSpace:'nowrap'}}>
+                <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(t.SLAAdjustedDte||'').split(' ')[0]||'-'}</div>
+                {t.SLAAdjustedDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{t.SLAAdjustedDte.split(' ')[1]}</div>}
+              </td>
+              <td>
+                <div className="task-desc-main">{desc}</div>
+                <div className="task-client">{t.ShortDescription || '-'}</div>
+              </td>
+              <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.SLAInHours != null ? Number(t.SLAInHours) : '-'}</span></td>
+              <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnHold != null ? parseFloat(t.TotalHoursOnHold).toFixed(1) : '-'}</span></td>
+              <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnTask != null ? parseFloat(t.TotalHoursOnTask).toFixed(1) : '-'}</span></td>
+              <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.TaskStatus || '-'}</span></td>
+              <td style={{whiteSpace:'nowrap'}}>
+                <span className={`pill ${status.cls}`}>
+                  <span className="pill-dot"/>{status.label}
+                </span>
+              </td>
+              <td>
+                <div className="tat-cell">
+                  {tat != null ? (
+                    <>
+                      <div className="t">
+                        <span className="mono">{tat.toFixed(1)}h</span>
+                        <span className="vs">/ {target.toFixed(1)}h target</span>
+                      </div>
+                      <div className="tat-bar">
+                        <div className={`progress-fill ${status.cls}`} style={{ width: `${Math.min(pct * 100, 100)}%` }}/>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="t"><span className="vs" style={{marginLeft:'auto'}}>/ {target.toFixed(1)}h target</span></div>
+                  )}
+                </div>
+              </td>
+              <td style={{whiteSpace:'nowrap'}}>
+                <span className={`priority ${prio === 'high' ? 'high' : prio === 'med' ? 'med' : 'low'}`}>
+                  <span className="dot"/>{prioLabel}
+                </span>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+};
+
 // --- Alerts panel ---
 const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, customTargets = {}, enableDrillDown = true, drillMode = 'list' }) => {
   const [expandedId, setExpandedId] = React.useState(null);
@@ -192,7 +318,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
     if (taskMap[a.id]) return; // already fetched
     setLoadingId(a.id);
     setErrorId(null);
-    getAlertTasks(a.queueId, atRiskPct, customTargets[a.queueId] || null, maxTasks)
+    getAlertTasks(a.queueId, atRiskPct, customTargets[a.queueId] || null)
       .then(data => { setTaskMap(prev => ({ ...prev, [a.id]: data })); setLoadingId(null); })
       .catch(() => { setErrorId(a.id); setLoadingId(null); });
   };
@@ -278,21 +404,23 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                             <tr>
                               <th style={{width: '90px'}}>Task ID</th>
                               <th style={{width: '100px'}}>App ID</th>
-                              <th style={{width: '100px'}}>Create Dte</th>
-                              <th style={{width: '120px'}}>SLAAdjusted Dte</th>
-                              <th>Description</th>
+                              <th style={{width: '100px', whiteSpace:'normal'}}>Create Dte</th>
+                              <th style={{width: '110px', whiteSpace:'normal'}}>SLAAdjusted Dte</th>
+                              <th style={{width:'25%'}}>Description</th>
+                              <th style={{width: '70px', whiteSpace:'normal'}}>On hold (hours)</th>
+                              <th style={{width: '70px', whiteSpace:'normal'}}>On task (hours)</th>
                               <th style={{width: '100px'}}>Current</th>
                               <th style={{width: '90px'}}>Status</th>
-                              <th style={{width: '180px'}}>TAT vs Target</th>
-                              <th style={{width: '80px'}}>Priority</th>
+                              <th style={{width: '160px'}}>TAT vs Target</th>
+                              <th style={{width: '70px'}}>Priority</th>
                             </tr>
                           </thead>
                           <tbody>
                             {rows.map(t => {
                               const status = alertStatusInfo(t.taskType);
-                              const target = Number(t.TargetHours ?? t.SLAInHours ?? 0);
-                              const tat = Number(t.TatHours ?? t.TotalHoursOnTask ?? 0);
-                              const pct = target > 0 ? Math.min(tat / target, 1.6) : 0;
+                              const target = t.TargetHours != null ? Number(t.TargetHours) : (t.SLAInHours != null ? Number(t.SLAInHours) : 0);
+                              const tat = t.TotalHoursOnTask != null ? Number(t.TotalHoursOnTask) : (t.TatHours != null ? Number(t.TatHours) : null);
+                              const pct = (tat != null && target > 0) ? Math.min(tat / target, 1.6) : 0;
                               const desc = (t.StaffFullName && t.StaffFullName.trim())
                                 ? t.StaffFullName.trim()
                                 : (t.ShortDescription || `Task #${t.TaskID}`);
@@ -315,24 +443,32 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                                     <div className="task-desc-main">{desc}</div>
                                     <div className="task-client">{t.ShortDescription || '-'}</div>
                                   </td>
+                                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnHold != null ? parseFloat(t.TotalHoursOnHold).toFixed(1) : '-'}</span></td>
+                                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnTask != null ? parseFloat(t.TotalHoursOnTask).toFixed(1) : '-'}</span></td>
                                   <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.TaskStatus || '-'}</span></td>
                                   <td style={{whiteSpace:'nowrap'}}>
                                     <span className={`pill ${status.cls}`}>
                                       <span className="pill-dot"/>{status.label}
                                     </span>
                                   </td>
-                                  <td style={{whiteSpace:'nowrap'}}>
+                                  <td>
                                     <div className="tat-cell">
-                                      <div className="t">
-                                        <span className="mono">{tat.toFixed(1)}h</span>
-                                        <span className="vs">/ {target.toFixed(1)}h target</span>
-                                      </div>
-                                      <div className="tat-bar">
-                                        <div className={`progress-fill ${status.cls}`} style={{ width: `${Math.min(pct * 100, 100)}%` }}/>
-                                      </div>
+                                      {tat != null ? (
+                                        <>
+                                          <div className="t">
+                                            <span className="mono">{tat.toFixed(1)}h</span>
+                                            <span className="vs">/ {target.toFixed(1)}h target</span>
+                                          </div>
+                                          <div className="tat-bar">
+                                            <div className={`progress-fill ${status.cls}`} style={{ width: `${Math.min(pct * 100, 100)}%` }}/>
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <div className="t"><span className="vs" style={{marginLeft:'auto'}}>/ {target.toFixed(1)}h target</span></div>
+                                      )}
                                     </div>
                                   </td>
-                                  <td style={{whiteSpace:'nowrap'}}>
+                                  <td>
                                     <span className={`priority ${prio}`}>
                                       <span className="dot"/>{prioLabel}
                                     </span>
@@ -392,8 +528,8 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
 };
 
 // --- Task row ---
-const TaskRow = ({ task, target }) => {
-  const pct = Math.min(task.tatHours / target, 1.6);
+const TaskRow = ({ task, target, showCompletedDte = false }) => {
+  const pct = task.tatHours != null ? Math.min(task.tatHours / target, 1.6) : 0;
   const barCls = task.status;
   const rowCls = task.status === 'bad' ? 'overdue-row' : task.status === 'warn' ? 'risk-row' : 'on-track-row';
   const statusLabel = task.status === 'ok' ? 'On Track' : task.status === 'warn' ? 'At Risk' : 'Overdue';
@@ -403,36 +539,53 @@ const TaskRow = ({ task, target }) => {
     <tr className={rowCls}>
       <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.id}</span></td>
       <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.appId != null ? task.appId : '-'}</span></td>
-      <td style={{whiteSpace:'nowrap'}}>
-        <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(task.createDte||'').split(' ')[0]||'-'}</div>
-        {task.createDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{task.createDte.split(' ')[1]}</div>}
-      </td>
+      {!showCompletedDte && (
+        <td style={{whiteSpace:'nowrap'}}>
+          <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(task.createDte||'').split(' ')[0]||'-'}</div>
+          {task.createDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{task.createDte.split(' ')[1]}</div>}
+        </td>
+      )}
       <td style={{whiteSpace:'nowrap'}}>
         <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(task.slaAdjustedDte||'').split(' ')[0]||'-'}</div>
         {task.slaAdjustedDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{task.slaAdjustedDte.split(' ')[1]}</div>}
       </td>
+      {showCompletedDte && (
+        <td style={{whiteSpace:'nowrap'}}>
+          <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{(task.completedDte||'').split(' ')[0]||'-'}</div>
+          {task.completedDte?.split(' ')[1] && <div style={{fontSize:'12px',color:'var(--ink-soft)'}}>{task.completedDte.split(' ')[1]}</div>}
+        </td>
+      )}
       <td>
         <div className="task-desc-main">{task.desc}</div>
         <div className="task-client">{task.client}</div>
       </td>
+      <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.slaInHours != null ? task.slaInHours : '-'}</span></td>
+      <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.onHoldHours != null ? task.onHoldHours.toFixed(1) : '-'}</span></td>
+      <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.onTaskHours != null ? task.onTaskHours.toFixed(1) : '-'}</span></td>
       <td style={{whiteSpace:'nowrap'}}><span className="soft">{task.taskStatus || '-'}</span></td>
       <td style={{whiteSpace:'nowrap'}}>
         <span className={`pill ${task.status}`}>
           <span className="pill-dot"/>{statusLabel}
         </span>
       </td>
-      <td style={{whiteSpace:'nowrap'}}>
+      <td>
         <div className="tat-cell">
-          <div className="t">
-            <span className="mono">{task.tatHours.toFixed(1)}h</span>
-            <span className="vs">/ {target}h target</span>
-          </div>
-          <div className="tat-bar">
-            <div className={`progress-fill ${barCls}`} style={{ width: `${Math.min(pct*100, 100)}%` }}/>
-          </div>
+          {task.tatHours != null ? (
+            <>
+              <div className="t">
+                <span className="mono">{task.tatHours.toFixed(1)}h</span>
+                <span className="vs">/ {target}h target</span>
+              </div>
+              <div className="tat-bar">
+                <div className={`progress-fill ${barCls}`} style={{ width: `${Math.min(pct*100, 100)}%` }}/>
+              </div>
+            </>
+          ) : (
+            <div className="t"><span className="vs" style={{marginLeft:'auto'}}>/ {target}h target</span></div>
+          )}
         </div>
       </td>
-      <td style={{whiteSpace:'nowrap'}}>
+      <td>
         <span className={`priority ${task.priority === 'high' ? 'high' : task.priority === 'med' ? 'med' : 'low'}`}>
           <span className="dot"/>{prioLabel}
         </span>
@@ -442,7 +595,24 @@ const TaskRow = ({ task, target }) => {
 };
 
 // --- Modal ---
-const TaskModal = ({ team, tasks = [], loading = false, onClose, maxTasks = 10 }) => {
+const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10, taskLabel, loading = false, completedMode = false }) => {
+  const [sort, cycleSort] = useSortState();
+  const sortedTasks = sortRows(tasks, sort.col, sort.dir, (t, col) => {
+    if (col === 'id')           return parseInt((t.id||'').replace('T-',''),10)||0;
+    if (col === 'appId')        return t.appId         ?? null;
+    if (col === 'createDte')    return parseDMY(t.createDte);
+    if (col === 'completedDte') return parseDMY(t.completedDte);
+    if (col === 'slaAdj')       return parseDMY(t.slaAdjustedDte);
+    if (col === 'desc')         return t.desc          || '';
+    if (col === 'slaHours')     return t.slaInHours    ?? null;
+    if (col === 'onHold')       return t.onHoldHours   ?? null;
+    if (col === 'onTask')       return t.onTaskHours   ?? null;
+    if (col === 'current')      return t.taskStatus    || '';
+    if (col === 'status')       return ({bad:0,warn:1,ok:2}[t.status] ?? 3);
+    if (col === 'tat')          return t.tatHours      ?? 0;
+    if (col === 'priority')     return ({high:0,med:1,low:2}[t.priority] ?? 3);
+    return '';
+  });
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -453,16 +623,40 @@ const TaskModal = ({ team, tasks = [], loading = false, onClose, maxTasks = 10 }
     };
   }, [onClose]);
 
+  const completedAvgTat = React.useMemo(() => {
+    if (!completedMode || tasks.length === 0) return null;
+    const vals = tasks.map(t => {
+      const tat = t.tatHours;
+      // Primary: TotalHoursOnTask when positive (non-null, non-zero, non-negative)
+      // Negative tatHours means the normalizeTask fallback computed (CompletedDate - SLAAdjustedDate)
+      // which is negative when completed before the adjusted deadline — exclude from avg TAT
+      if (tat != null && isFinite(tat) && tat > 0) return tat;
+      // Fallback: (CompletedDateTime - DateCreatedDateTime) in hours
+      // when TotalHoursOnTask IS NULL or zero, both dates present
+      // DateCreated=today is guaranteed by the API filter for this drill-through
+      if (t.completedDte && t.createDte) {
+        const createTs = parseDMY(t.createDte);
+        const compTs   = parseDMY(t.completedDte);
+        if (createTs !== 0 && compTs !== 0) {
+          const diff = (compTs - createTs) / 3600000;
+          if (isFinite(diff)) return diff;
+        }
+      }
+      return null;
+    }).filter(h => h != null);
+    return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  }, [completedMode, tasks]);
+
   const cls = slaClass(team.sla);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" style={{width: 'min(1600px, 96vw)'}}>
+      <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
         <div className="modal-head">
           <div className="modal-head-top">
             <div className="modal-title">
               <div className="sub">{team.dept} · SLA target {team.target}h</div>
-              <h2>{team.name} — Top {maxTasks} Active Tasks</h2>
+              <h2>{team.name} — {taskLabel ?? `Top ${maxTasks} Active Tasks`}</h2>
             </div>
             <button className="modal-close" onClick={onClose} aria-label="Close">
               <Icon name="close" size={18}/>
@@ -470,47 +664,94 @@ const TaskModal = ({ team, tasks = [], loading = false, onClose, maxTasks = 10 }
           </div>
           <div className="modal-chips">
             <div className="chip">
-              <div className="chip-label">Volume<InfoTip text={TOOLTIPS.modal.volume} width={220}/></div>
-              <div className="chip-value">{team.volume}</div>
+              <div className="chip-label">SLA% (only Completed tasks)<InfoTip text={TOOLTIPS.modal.sla} width={260}/></div>
+              <div className="chip-value">
+                {completedMode && tasks.length > 0
+                  ? Math.round(tasks.filter(t => t.status !== 'bad').length / tasks.length * 100)
+                  : team.sla
+                }<span className="unit">%</span>
+              </div>
             </div>
-            <div className="chip">
-              <div className="chip-label">SLA %<InfoTip text={TOOLTIPS.modal.sla} width={260}/></div>
-              <div className="chip-value">{team.sla}<span className="unit">%</span></div>
-            </div>
-            <div className={`chip ${team.avgTat > team.target ? 'danger' : ''}`}>
-              <div className="chip-label">Avg TAT<InfoTip text={TOOLTIPS.modal.avgTat} width={240}/></div>
-              <div className="chip-value" style={{color: '#111'}}>{fmtHMS(team.avgTat)}</div>
-            </div>
-            <div className="chip overdue danger">
-              <div className="chip-label">Overdue<InfoTip text={TOOLTIPS.modal.overdue} width={240}/></div>
-              <div className="chip-value">{team.overdue}</div>
-            </div>
+            {completedMode ? (
+              <>
+                <div className="chip">
+                  <div className="chip-label">Total Completed Tasks</div>
+                  <div className="chip-value">{tasks.length}</div>
+                </div>
+                <div className="chip">
+                  <div className="chip-label">Total On-Time Tasks</div>
+                  <div className="chip-value">{tasks.filter(t => t.status !== 'bad').length}</div>
+                </div>
+                <div className="chip overdue danger">
+                  <div className="chip-label">Overdue (Only Completed Tasks)<InfoTip text={TOOLTIPS.modal.overdueCompleted} width={280}/></div>
+                  <div className="chip-value">{tasks.filter(t => t.status === 'bad').length}</div>
+                </div>
+                <div className={`chip ${(completedAvgTat ?? team.avgTat) > team.target ? 'danger' : ''}`}>
+                  <div className="chip-label">Avg TAT (ONLY COMPLETED TASKS)<InfoTip text={TOOLTIPS.modal.avgTatCompleted} width={280}/></div>
+                  <div className="chip-value" style={{color:'#111'}}>{completedAvgTat != null ? fmtHMS(completedAvgTat) : fmtHMS(team.avgTat)}</div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="chip">
+                  <div className="chip-label">Volume<InfoTip text={TOOLTIPS.modal.volume} width={220}/></div>
+                  <div className="chip-value">{team.volume}</div>
+                </div>
+                <div className={`chip ${team.avgTat > team.target ? 'danger' : ''}`}>
+                  <div className="chip-label">Avg TAT<InfoTip text={TOOLTIPS.modal.avgTat} width={240}/></div>
+                  <div className="chip-value">{fmtHMS(team.avgTat)}</div>
+                </div>
+                <div className="chip overdue danger">
+                  <div className="chip-label">Overdue (only Active tasks)<InfoTip text={TOOLTIPS.modal.overdue} width={240}/></div>
+                  <div className="chip-value">{team.overdue}</div>
+                </div>
+              </>
+            )}
           </div>
         </div>
         <div className="modal-body">
+          {loading ? (
+            <div style={{padding: 48, textAlign: 'center', color: 'var(--ink-muted)'}}>Loading…</div>
+          ) : (
           <table className="task-table">
             <thead>
-              <tr>
-                <th style={{width: '90px'}}>Task ID</th>
-                <th style={{width: '100px'}}>App ID</th>
-                <th style={{width: '100px'}}>Create Dte</th>
-                <th style={{width: '120px'}}>SLAAdjusted Dte</th>
-                <th>Description</th>
-                <th style={{width: '100px'}}>Current</th>
-                <th style={{width: '90px'}}>Status</th>
-                <th style={{width: '180px'}}>TAT vs Target</th>
-                <th style={{width: '80px'}}>Priority</th>
-              </tr>
+              {completedMode ? (
+                <tr>
+                  <SortTh sortKey="id"           sort={sort} onSort={cycleSort} style={{width: '90px'}}>Task ID</SortTh>
+                  <SortTh sortKey="appId"        sort={sort} onSort={cycleSort} style={{width: '100px'}}>App ID</SortTh>
+                  <SortTh sortKey="slaAdj"       sort={sort} onSort={cycleSort} style={{width: '110px', whiteSpace:'normal'}}>SLAAdjusted Dte</SortTh>
+                  <SortTh sortKey="completedDte" sort={sort} onSort={cycleSort} style={{width: '100px', whiteSpace:'normal'}}>Completed Dte</SortTh>
+                  <SortTh sortKey="desc"         sort={sort} onSort={cycleSort} style={{width:'25%'}}>Description</SortTh>
+                  <SortTh sortKey="slaHours"     sort={sort} onSort={cycleSort} style={{width: '65px', whiteSpace:'normal'}}>SLA (hours)</SortTh>
+                  <SortTh sortKey="onHold"       sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On hold (hours)</SortTh>
+                  <SortTh sortKey="onTask"       sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On task (hours)</SortTh>
+                  <SortTh sortKey="current"      sort={sort} onSort={cycleSort} style={{width: '100px'}}>Current</SortTh>
+                  <SortTh sortKey="status"       sort={sort} onSort={cycleSort} style={{width: '90px'}}>Status</SortTh>
+                  <SortTh sortKey="tat"          sort={sort} onSort={cycleSort} style={{width: '160px'}}>TAT vs Target</SortTh>
+                  <SortTh sortKey="priority"     sort={sort} onSort={cycleSort} style={{width: '70px'}}>Priority</SortTh>
+                </tr>
+              ) : (
+                <tr>
+                  <SortTh sortKey="id"        sort={sort} onSort={cycleSort} style={{width: '90px'}}>Task ID</SortTh>
+                  <SortTh sortKey="appId"     sort={sort} onSort={cycleSort} style={{width: '100px'}}>App ID</SortTh>
+                  <SortTh sortKey="createDte" sort={sort} onSort={cycleSort} style={{width: '100px', whiteSpace:'normal'}}>Create Dte</SortTh>
+                  <SortTh sortKey="slaAdj"    sort={sort} onSort={cycleSort} style={{width: '110px', whiteSpace:'normal'}}>SLAAdjusted Dte</SortTh>
+                  <SortTh sortKey="desc"      sort={sort} onSort={cycleSort} style={{width:'25%'}}>Description</SortTh>
+                  <SortTh sortKey="slaHours"  sort={sort} onSort={cycleSort} style={{width: '65px', whiteSpace:'normal'}}>SLA (hours)</SortTh>
+                  <SortTh sortKey="onHold"    sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On hold (hours)</SortTh>
+                  <SortTh sortKey="onTask"    sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On task (hours)</SortTh>
+                  <SortTh sortKey="current"   sort={sort} onSort={cycleSort} style={{width: '100px'}}>Current</SortTh>
+                  <SortTh sortKey="status"    sort={sort} onSort={cycleSort} style={{width: '90px'}}>Status</SortTh>
+                  <SortTh sortKey="tat"       sort={sort} onSort={cycleSort} style={{width: '160px'}}>TAT vs Target</SortTh>
+                  <SortTh sortKey="priority"  sort={sort} onSort={cycleSort} style={{width: '70px'}}>Priority</SortTh>
+                </tr>
+              )}
             </thead>
             <tbody>
-              {loading
-                ? <tr><td colSpan={9} style={{textAlign:'center',padding:'24px',color:'var(--muted)'}}>Loading tasks…</td></tr>
-                : tasks.length === 0
-                  ? <tr><td colSpan={9} style={{textAlign:'center',padding:'24px',color:'var(--muted)'}}>No active tasks found for today.</td></tr>
-                  : tasks.map(t => <TaskRow key={t.id} task={t} target={team.target}/>)
-              }
+              {sortedTasks.map(t => <TaskRow key={t.id} task={t} target={team.target} showCompletedDte={completedMode}/>)}
             </tbody>
           </table>
+          )}
         </div>
       </div>
     </div>
@@ -520,7 +761,7 @@ const TaskModal = ({ team, tasks = [], loading = false, onClose, maxTasks = 10 }
 // --- Loan KPI Tile ---
 // Layout matches provided screenshot: title row, two-col stats (count left / amount right),
 // footer with count delta (left, green/red) and amount delta (right, green/red).
-const LoanKpiTile = ({ label, count, amount, countDelta, amtDelta, target, onClick, tooltip, tooltipWidth }) => {
+const LoanKpiTile = ({ label, count, amount, countDelta, amtDelta, countDelta5, amtDelta5, target, onClick, tooltip, tooltipWidth }) => {
   // Full number with commas for the stat value (e.g. $1,100,000)
   const fmtAmtFull = (v) => {
     if (v == null || isNaN(v)) return '$0';
@@ -590,6 +831,34 @@ const LoanKpiTile = ({ label, count, amount, countDelta, amtDelta, target, onCli
             </>
           )}
         </span>
+        {(() => {
+          const hasCnt5 = countDelta5 != null && countDelta5 !== 0;
+          const hasAmt5 = amtDelta5  != null && amtDelta5  !== 0;
+          return (
+            <span className="stat-delta" style={{ color: greyCol, fontWeight: 400, display: 'block', marginTop: '2px' }}>
+              {!hasCnt5 && !hasAmt5 ? (
+                <span>No change vs 5 days ago</span>
+              ) : (
+                <>
+                  {hasCnt5 && (
+                    <span style={{ color: countDelta5 > 0 ? posCol : negCol, fontWeight: 600 }}>
+                      {countDelta5 > 0 ? '↑' : '↓'} {Math.abs(countDelta5)}
+                    </span>
+                  )}
+                  {hasCnt5 && hasAmt5 && (
+                    <span style={{ color: greyCol, fontWeight: 400 }}> and </span>
+                  )}
+                  {hasAmt5 && (
+                    <span style={{ color: amtDelta5 > 0 ? posCol : negCol, fontWeight: 600 }}>
+                      {amtDelta5 > 0 ? '↑' : '↓'} {fmtAmtAbs(Math.abs(amtDelta5))}
+                    </span>
+                  )}
+                  <span style={{ color: greyCol, fontWeight: 400 }}> vs 5 days ago</span>
+                </>
+              )}
+            </span>
+          );
+        })()}
       </div>
     </div>
   );
