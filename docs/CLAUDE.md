@@ -81,13 +81,14 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 > - `TotalHoursOnTask IS NOT NULL AND TotalHoursOnTask > 0` (null and zero excluded)
 >
 > AND **one or both** of these overdue conditions is true:
-> 1. `TotalHoursOnTask > t.SLAInHours` (per-task SLA field, both non-null non-zero)
-> 2. `SLAAdjustedDate IS NOT NULL AND GETDATE() > SLAAdjustedDate` (adjusted deadline has passed)
+> 1. `TotalHoursOnTask > 0 AND TotalHoursOnTask > t.SLAInHours` (TAT exceeded target — requires non-zero recorded time)
+> 2. `SLAAdjustedDate IS NOT NULL AND GETDATE() > SLAAdjustedDate` (adjusted deadline has passed — fires regardless of TotalHoursOnTask)
+>
+> **Important:** Condition 2 is independent of `TotalHoursOnTask`. A task with 0.0h or null TAT is still OVERDUE if its adjusted deadline has passed. Only condition 1 requires `TotalHoursOnTask > 0`.
 >
 > SQL condition:
 > ```sql
-> AND t.TotalHoursOnTask > 0
-> AND (t.TotalHoursOnTask > t.SLAInHours
+> AND ((t.TotalHoursOnTask > 0 AND t.TotalHoursOnTask > t.SLAInHours)
 >      OR (t.SLAAdjustedDate IS NOT NULL AND GETDATE() > t.SLAAdjustedDate))
 > ```
 >
