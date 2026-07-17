@@ -865,7 +865,7 @@ The regular active-tasks modal retains its original chips (SLA % | Volume | Avg 
 ### Tooltip Rule (2026-06-09)
 - All shared tooltip text lives in `frontend/src/constants.js` → `TOOLTIPS` object, keyed by section (`kpi`, `team`, `chart`, `teams`, `modal`).
 - Settings-specific tooltip text (Refresh interval, At Risk threshold, Tasks in drill-down) lives inline in `views.jsx`.
-- **Source of truth for tooltip content (2026-07-16):** `docs/SLA_Dashboard_Tooltips.xlsx` column E (`Updated Tooltip Text`). When updating tooltip copy, edit column E in the spreadsheet first, then apply the new text to the corresponding `TOOLTIPS` key in `constants.js`. All 24 tooltip entries are mapped in that file (rows 1–24, one row per key).
+- **Source of truth for tooltip content (2026-07-17):** `docs/SLA_Dashboard_Tooltips.xlsx` column E (`Updated Tooltip Text`). When updating tooltip copy, edit column E in the spreadsheet first, then apply the new text to the corresponding `TOOLTIPS` key in `constants.js`. All 24 tooltip entries are mapped in that file (rows 1–24, one row per key). Dashboard tooltip content was last synchronized from column E on 2026-07-17.
 
 #### Tooltip Z-Index / Stacking Rule (2026-06-15 — MANDATORY)
 
@@ -1534,59 +1534,77 @@ Tunnel URL would become `https://api.sla.mezy.com.au`. Update `VITE_API_BASE` in
 
 ---
 
-## 28. Dynamic "Today" — `MAX(DateCreated)` Rule (Added 2026-06-19, confirmed 2026-07-16)
+## 28. Runtime Date/Time Rule — `GETDATE()` (Updated 2026-07-17)
 
-> **INVARIANT: There are NO hardcoded date literals anywhere in production code. "Today" is always resolved dynamically at runtime.**
+> **GLOBAL INVARIANT: All current date/time logic uses runtime sources only. Hardcoded date literals in production SQL or business logic are prohibited. CI enforces this via `npm run check-dates`.**
 
-### 28.1 How "today" is resolved
+### 28.1 Centralized "now" sources
 
-All date-scoped calculations (KPI tiles, team cards, deltas, alerts, tasks drill-through, history chart, loan strip) derive their reporting date from a single function: `todayLocal()` in `backend/server.js`.
+Two functions in `backend/server.js` are the single source of truth for all date/time values:
+
+| Function | Returns | Used for |
+|---|---|---|
+| `systemTodayLocal()` | System clock `YYYY-MM-DD` (local) | Date-range SQL params (`DateCreated >= ?`) |
+| `getNowSql()` | `'GETDATE()'` SQL literal | Real-time comparisons (overdue, at-risk) |
 
 ```javascript
-// _effectiveDate is populated by resolveEffectiveDate() at startup and every 60 min.
-// Falls back to real system date if the query fails or hasn't completed yet.
-function todayLocal() {
-  return _effectiveDate || systemTodayLocal();
+// Current calendar date — always system clock, never cached or hardcoded.
+function systemTodayLocal() {
+  const d = new Date();
+  return `${d.getFullYear()}-${...}-${...}`;
 }
+const todayLocal = systemTodayLocal; // alias used throughout the file
+
+// Runtime "now" for SQL — always GETDATE(), evaluated by SQL Server at query time.
+function getNowSql() { return 'GETDATE()'; }
 ```
 
-`_effectiveDate` is set by:
+`computeDates()` calls `todayLocal()` fresh on every invocation — no caching, no `_effectiveDate`. Every cache-refresh cycle (5 min) computes the date window from the live system clock.
+
+### 28.2 Applies consistently to all features
+
+| Feature | Date source |
+|---|---|
+| KPI tiles (total tasks, SLA%, avg TAT, overdue) | `computeDates()` → `todayLocal()` |
+| Team card stats + deltas | `computeDates()` → `todayLocal()` |
+| Overdue / at-risk comparisons | `getNowSql()` → `GETDATE()` |
+| Alerts (SLA% threshold, fired-at timestamp) | `computeDates()` + `getNowSql()` |
+| Task drill-throughs / popups | same `?scope=today` param → `computeDates()` |
+| 7-day trend chart + history chart | `computeDates()` date range |
+| Loan summary strip | `computeDates()` date range |
+| SSE fingerprint (change detection) | `computeDates()` date range |
+| Frontend `normalizeTask()` overdue check | `Date.now()` (browser runtime) |
+
+### 28.3 Hardcoded date guardrail
+
+```bash
+# Run from backend/
+npm run check-dates
+```
+
+`backend/check-hardcoded-dates.js` scans `server.js` for date literals matching `'YYYY-MM-DD'` on non-comment lines. Exits 1 if any violation is found. Add `npm run check-dates` to your CI pipeline as a blocking step before deployment.
+
+Violation example that the check catches:
 ```javascript
-async function resolveEffectiveDate() {
-  // Queries: SELECT CONVERT(varchar(10), MAX(DateCreated), 120) AS maxDate FROM Tasks WITH (NOLOCK)
-  // Result is cached in _effectiveDate; refreshed every 60 minutes.
-  // Fallback: systemTodayLocal() (real clock) if query fails or returns no rows.
-}
+// FORBIDDEN in production code:
+const today = '2026-05-28';            // hardcoded — FAIL
+`WHERE DateCreated >= '2026-05-28'`    // hardcoded — FAIL
+
+// Correct:
+const today = systemTodayLocal();      // runtime — OK
+`WHERE DateCreated >= '${today}'`      // runtime — OK
 ```
 
-### 28.2 Why `MAX(DateCreated)` not system clock
+### 28.4 Timezone
 
-The production database is a SQL Server restore from a point-in-time backup. The most recent task in the database may be dated `2026-05-28` even though the server clock says `2026-07-16`. Using the system clock as "today" would return zero results. Using `MAX(DateCreated)` ensures the dashboard always reflects the latest available data regardless of when the backup was taken.
+Timezone handling is unchanged: all date computations use local wall-clock parts from `new Date()` (not UTC). `prevBizDay()` and `nextDay()` operate on local date strings to prevent AEST off-by-one on UTC boundaries.
 
-Once the database is replaced with a live connection (real-time data), `MAX(DateCreated)` automatically equals today's system date — no code change required.
-
-### 28.3 All query paths use `todayLocal()`
-
-Every endpoint that needs a date window calls `computeDates()`:
-```javascript
-function computeDates() {
-  const today = todayLocal();          // MAX(DateCreated) or system date
-  const prev  = prevBizDay(today);     // previous business day
-  ...
-  return { today, prev, todayNext, prevNext, prev5, prev5Next };
-}
-```
-
-`computeDates()` is called fresh inside every cache-refresh function (`fetchKpiData`, `fetchTeamsData`, `fetchHistoryData`, etc.) so dates are recalculated on every 5-minute cache cycle. A day change in the DB propagates within one cache cycle (≤ 5 min for cached endpoints, immediately for uncached ones).
-
-### 28.4 Deployment checklist — no hardcoded dates
+### 28.5 Deployment checklist
 
 Before deploying, verify:
-- [ ] `grep -r "2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]" backend/` returns only comments, not string literals in queries
-- [ ] `_effectiveDate` is `null` at startup (not set to a fixed string)
-- [ ] `resolveEffectiveDate()` is called in `app.listen` callback on startup
-- [ ] `setInterval(resolveEffectiveDate, 60 * 60 * 1000)` is active for hourly refresh
-- [ ] No `TODAY_FIXED`, `hardcoded_date`, or similar constants exist anywhere in `backend/` or `frontend/src/`
+- [ ] `npm run check-dates` (from `backend/`) exits 0
+- [ ] No `TODAY_FIXED`, `hardcoded_date`, `_effectiveDate`, or date string constants anywhere in `backend/` or `frontend/src/`
+- [ ] `systemTodayLocal()` and `getNowSql()` are the only two date-source functions; no other function constructs date strings independently
 
 ---
 

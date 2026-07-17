@@ -37,15 +37,9 @@ function sendError(res, status, publicMessage, err) {
 // Teams 5 (CLA), 6 (Funder Submission), 7 (Funder MIR) have no dept fallback � count 0 if no KPI match.
 
 // --- Effective reporting date -----------------------------------------------
-// The dashboard operates against a reporting DB refreshed nightly from the live
-// server.  ALL business calculations use the LATEST available date in that DB,
-// not the real system calendar date.
-//
-// _effectiveDate is resolved at startup (and every 60 min) by querying
-// MAX(DateCreated) from Tasks.  Falls back to system today if the query fails.
-let _effectiveDate = null;
-
-// Real system clock (YYYY-MM-DD local). Used ONLY inside getNowSql().
+// Current calendar date from the system clock (YYYY-MM-DD local).
+// All date-range SQL parameters are built from this at query time — no caching,
+// no hardcoded fallbacks.  Timezone behaviour is unchanged (local wall clock).
 function systemTodayLocal() {
   const d = new Date();
   const y = d.getFullYear();
@@ -54,34 +48,8 @@ function systemTodayLocal() {
   return `${y}-${m}-${day}`;
 }
 
-// Effective reporting date for all business calculations.
-// Falls back to real system date until resolveEffectiveDate() completes.
-function todayLocal() {
-  return _effectiveDate || systemTodayLocal();
-}
-
-// Query MAX(DateCreated) from Tasks and cache as _effectiveDate.
-// Refreshed every 60 min so the date advances when the DB refreshes.
-async function resolveEffectiveDate() {
-  try {
-    const pool   = await connectDB();
-    const result = await pool.request().query(
-      `SELECT CONVERT(varchar(10), MAX(DateCreated), 120) AS maxDate
-       FROM Tasks WITH (NOLOCK) WHERE DateCreated IS NOT NULL`
-    );
-    const maxDate = result.recordset[0]?.maxDate;
-    if (maxDate) {
-      _effectiveDate = maxDate;
-      console.log(`[reporting date] effective date: ${_effectiveDate}`);
-    } else {
-      _effectiveDate = systemTodayLocal();
-      console.log('[reporting date] no task data, using system date: ' + _effectiveDate);
-    }
-  } catch (err) {
-    if (!_effectiveDate) _effectiveDate = systemTodayLocal();
-    console.warn('[reporting date] resolution failed, keeping:', _effectiveDate, err.message);
-  }
-}
+// Alias: all internal callers use todayLocal(); both always return system clock.
+const todayLocal = systemTodayLocal;
 function prevBizDay(dateStr) {
   const d   = new Date(dateStr + 'T00:00:00');
   const dow = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
@@ -337,15 +305,11 @@ function buildTargetExpr(customTargets) {
 }
 
 // --- TAT SQL expression helper -----------------------------------------------
-// Snapshot/reporting mode (effective date < system today):
-//   CAST('<effective+1>' AS DATETIME) measures TAT within the reporting day.
-// Live mode (effective date = system today): GETDATE() gives real-time TAT.
+// Runtime "now" for SQL comparisons (overdue checks, at-risk thresholds).
+// Always GETDATE() — the SQL Server engine clock at query execution time.
+// No hardcoded datetime literals; no snapshot-mode fallback.
 function getNowSql() {
-  const effective = todayLocal();
-  const sysToday  = systemTodayLocal();
-  return effective < sysToday
-    ? `CAST('${nextDay(effective)}' AS DATETIME)`
-    : 'GETDATE()';
+  return 'GETDATE()';
 }
 // Set to true to serve mock data without a DB connection.
 // Switch to false once SQL Server TCP/IP is enabled (see db-health endpoint).
@@ -2006,10 +1970,6 @@ app.listen(PORT, async () => {
   // long-running cold-disk queries simultaneously, which can crash the process.
   if (!USE_MOCK) {
     (async () => {
-      // Resolve effective reporting date before warming caches.
-      await resolveEffectiveDate();
-      setInterval(resolveEffectiveDate, 60 * 60 * 1000);
-
       // Discover dynamic KPI groups before first cache warm so team cards include them.
       // Also runs every 60 s independently so new ConfigTasks entries appear within ~1 min
       // without requiring a backend restart or waiting for the 5-min teams cache to expire.

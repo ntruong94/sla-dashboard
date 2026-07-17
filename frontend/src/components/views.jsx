@@ -832,7 +832,7 @@ const SettingsView = ({ teams, settings, onApply, onReset }) => {
             <div className="setting-meta">
               <Icon name="tasks-sm" size={18}/>
               <div>
-                <div style={{fontWeight:600,fontSize:14}}>Tasks in drill-down<InfoTip width={260} text={"Max number of tasks shown when you click into a team card or alert.\n\nTasks are ranked by SLA consumption (highest first), so the most critical items appear at the top.\n\nValid range: 1–100.\nDefault: 10."}/></div>
+                <div style={{fontWeight:600,fontSize:14}}>Tasks in drill-down<InfoTip width={260} text={"Max number of tasks shown when you click into a team card or alert.\n\nTasks are ranked by SLA consumption (highest first), so the most critical items appear at the top.\n\nValid range: 1–100.\nDefault: 50."}/></div>
                 <div style={{fontSize:12,color:'var(--ink-muted)'}}>Top N shown in modal</div>
               </div>
             </div>
