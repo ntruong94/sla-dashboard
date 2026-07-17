@@ -817,7 +817,7 @@ export default function App() {
           team={slaModalTeam}
           tasks={slaModalTasks}
           onClose={closeSlaModal}
-          taskLabel="Completed Tasks — Today"
+          taskLabel={<><span style={{color:'var(--bad)',fontWeight:700,letterSpacing:'0.05em'}}>COMPLETED</span>{' Tasks — Today'}</>}
           loading={slaTasksLoading}
           completedMode={true}
         />

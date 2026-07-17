@@ -709,6 +709,8 @@ Each Team Performance card shows a small label above the team name indicating th
 
 **TeamsView "Department" column (All Teams tab):** Displays `'Department Group'` (when `t.fallbackDeptId` is set) or `'KPI Group'` (when null), at `fontSize: 9`. Does **not** show the raw `t.dept` value (Origination / Credit / etc.).
 
+**TaskModal header breadcrumb (2026-07-17):** The `.sub` line above the team name in the drill-through popup (for both Team Performance card clicks and All Teams row clicks) shows `'Department Group' · SLA target Xh` or `'KPI Group' · SLA target Xh` — uses `team.fallbackDeptId ? 'Department Group' : 'KPI Group'`. The raw `team.dept` value (Origination / Credit / Settlement / Other) is **no longer shown** in any popup or drill-through context.
+
 **TeamsView column formatting (All Teams tab — updated 2026-07-16):**
 - **Target, Volume, Avg TAT, Overdue (only Active tasks)** — headers and cell values all use the same plain default font and color (no `danger-text`, no `soft`/muted class). All four columns are **center-aligned** (both `<th>` and `<td>`). No conditional color overrides for Avg TAT or Overdue in this table.
 - **Overdue (only Active tasks)** header: `whiteSpace:'normal'` to allow text wrapping (saves horizontal space).
@@ -768,6 +770,12 @@ The regular active-tasks modal retains its original chips (SLA % | Volume | Avg 
 - Data source: `CONVERT(VARCHAR(10), t.DateCompleted, 103) + ' ' + CONVERT(VARCHAR(8), t.DateCompleted, 108) AS CompletedDte` added to the `/api/tasks` completed-branch SELECT; mapped in `normalizeTask()` as `completedDte`.
 - `TaskRow` accepts `showCompletedDte` prop (default `false`): when `true`, hides the Create Dte `<td>` and shows Completed Dte `<td>` after SLAAdjusted Dte.
 - `TaskModal` accepts `completedMode` prop (default `false`); passes `showCompletedDte={completedMode}` to each `<TaskRow>`.
+
+**Completed-tasks modal — visual style (2026-07-17):**
+- **Modal background:** `#D3D3D3` (grey) — applied via `style={completedMode ? {background:'#D3D3D3'} : undefined}` on the `.modal` div. Active-task modals are unaffected.
+- **Table area background:** white (`#fff`) — applied via `style={completedMode ? {background:'#fff'} : undefined}` on the `.modal-body` div, keeping the table section white while the header/chips area shows the grey background.
+- **Title word “COMPLETED”:** rendered in `var(--bad)` red with `fontWeight:700` via a `<span>` inside the `taskLabel` JSX prop passed from `App.jsx`. Only the word “COMPLETED” is red; the rest of the title (`Tasks — Today`) remains the default colour.
+- **SLA% badge shadow + hover (trigger):** The clickable SLA% badge on each `TeamCard` (when `onSlaClick` is set) receives class `badge--sla-trigger` and inline `boxShadow: '0 2px 10px rgba(0,0,0,0.22)'`. CSS `.badge--sla-trigger:hover { filter: brightness(0.7); }` darkens the badge by 30% on hover. Size, shape, and position are unchanged.
 
 
 
@@ -894,7 +902,7 @@ The regular active-tasks modal retains its original chips (SLA % | Volume | Avg 
 
 > **Every tooltip bubble must always render in front of all other dashboard content — cards, charts, tables, modals, sidebar, and topbar. It must never be clipped, hidden behind containers, or cut off by `overflow: hidden`.**
 
-- **`InfoTip` (ⓘ icon tooltip):** Uses `ReactDOM.createPortal(bubble, document.body)` so the bubble is a direct child of `<body>`, outside any clipping ancestor. The bubble has `position: fixed; z-index: 9999`. This is already correct — do not change it.
+- **`InfoTip` (ⓘ icon tooltip):** Uses `ReactDOM.createPortal(bubble, document.body)` so the bubble is a direct child of `<body>`, outside any clipping ancestor. The bubble has `position: fixed; z-index: 9999`. **Interaction model (2026-07-17): click-to-toggle** — clicking the icon opens the bubble; clicking it again (or clicking outside, or pressing ESC) closes it. Only one InfoTip can be open at a time (opening a new one dispatches a `infotip-opened` custom DOM event that closes all others). Keyboard: Enter/Space toggles; Escape closes. `role="button"` + `aria-expanded` communicate state to screen readers. Chart data-point hover tooltips in `trend.jsx` / `history-chart.jsx` are NOT affected — those remain hover-triggered.
 - **Chart hover tooltip (`.tooltip` class in `trend.jsx` and `history-chart.jsx`):** Rendered via `ReactDOM.createPortal(..., document.body)` with `position: 'fixed'` and `zIndex: 9998` in the inline style. The fixed pixel position is computed from `wrapRef.current.getBoundingClientRect()` so the tooltip appears at the correct viewport location regardless of scroll position or ancestor overflow rules. The guard `wrapRef.current &&` ensures the ref is available before computing.
 - **Why portaling is required:** `.trend-card`, `.kpi`, `.card`, and `.alerts-panel` all have `overflow: hidden; isolation: isolate` in the CSS. Any `position: absolute` child (including chart hover tooltips) is clipped at the card boundary. Portaling moves the DOM node to `<body>` so it is never clipped.
 - **Z-index hierarchy:** `InfoTip` bubble = 9999 · chart hover tooltip = 9998 · modal overlay = 100 · sidebar = 10 · topbar = 9.

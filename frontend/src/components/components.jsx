@@ -10,34 +10,65 @@ import { fmtHMS, useSortState, sortRows, parseDMY, SortTh } from './utils.js';
 // ─── Info Tooltip ─────────────────────────────────────────────────────────────
 // Renders the bubble into document.body via a portal so parent overflow:hidden
 // or stacking contexts cannot clip it. Positioned with position:fixed.
+// Interaction: click-to-toggle. Outside-click and ESC close. One open at a time.
 export const InfoTip = ({ text, width }) => {
   const iconRef = React.useRef(null);
   const [pos, setPos] = React.useState(null); // {top, left, below} in px when visible
+  // Stable unique id per instance — used to close other open InfoTips on open
+  const idRef = React.useRef(null);
+  if (!idRef.current) idRef.current = Math.random().toString(36).slice(2);
 
-  const show = (e) => {
-    const r = (e.currentTarget || iconRef.current).getBoundingClientRect();
-    const bubbleH = 200; // conservative estimate — real height unknown until rendered
-    const below = r.top < bubbleH; // flip downward when too close to top of viewport
-    // position:fixed uses viewport coords — do NOT add scrollY/scrollX
-    setPos({
-      top:  below ? r.bottom : r.top,
-      left: r.left + r.width / 2,
-      below,
+  const toggle = (e) => {
+    e.stopPropagation();
+    setPos(prev => {
+      if (prev) return null; // already open → close
+      // closed → open: compute position and signal others to close
+      const r = iconRef.current.getBoundingClientRect();
+      const below = r.top < 200;
+      document.dispatchEvent(new CustomEvent('infotip-opened', { detail: { id: idRef.current } }));
+      return { top: below ? r.bottom : r.top, left: r.left + r.width / 2, below };
     });
   };
-  const hide = () => setPos(null);
+
+  // One-at-a-time: close when another InfoTip opens
+  React.useEffect(() => {
+    const handler = (e) => { if (e.detail.id !== idRef.current) setPos(null); };
+    document.addEventListener('infotip-opened', handler);
+    return () => document.removeEventListener('infotip-opened', handler);
+  }, []);
+
+  // Close on outside click/tap (pointerdown covers mouse + touch)
+  React.useEffect(() => {
+    if (!pos) return;
+    const handler = (e) => {
+      if (iconRef.current?.contains(e.target)) return;
+      setPos(null);
+    };
+    document.addEventListener('pointerdown', handler);
+    return () => document.removeEventListener('pointerdown', handler);
+  }, [pos]);
+
+  // Close on ESC
+  React.useEffect(() => {
+    if (!pos) return;
+    const handler = (e) => { if (e.key === 'Escape') setPos(null); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [pos]);
 
   return (
     <span
       ref={iconRef}
       className="info-tip"
       tabIndex={0}
-      role="note"
+      role="button"
       aria-label={text}
-      onMouseEnter={show}
-      onMouseLeave={hide}
-      onFocus={show}
-      onBlur={hide}
+      aria-expanded={pos != null}
+      onClick={toggle}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(e); }
+        else if (e.key === 'Escape') setPos(null);
+      }}
     >
       <span className="info-tip-icon">i</span>
       {pos && ReactDOM.createPortal(
@@ -106,10 +137,10 @@ const TeamCard = ({ team, onClick, onSlaClick }) => {
           <h3 className="card-team">{team.name}<InfoTip text={groupTooltip} width={280}/></h3>
         </div>
         <span
-          className={`badge ${cls}`}
+          className={`badge ${cls}${onSlaClick ? ' badge--sla-trigger' : ''}`}
           onClick={onSlaClick ? (e) => { e.stopPropagation(); onSlaClick(); } : undefined}
           role={onSlaClick ? 'button' : undefined}
-          style={onSlaClick ? { cursor: 'pointer' } : undefined}
+          style={onSlaClick ? { cursor: 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.22)' } : undefined}
         >
           <span className="badge-dot" />
           {team.sla}%
@@ -651,11 +682,11 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10, taskLabel, loadin
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
+      <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" style={completedMode ? {background:'#D3D3D3'} : undefined}>
         <div className="modal-head">
           <div className="modal-head-top">
             <div className="modal-title">
-              <div className="sub">{team.dept} · SLA target {team.target}h</div>
+              <div className="sub">{team.fallbackDeptId ? 'Department Group' : 'KPI Group'} · SLA target {team.target}h</div>
               <h2>{team.name} — {taskLabel ?? `Top ${maxTasks} Active Tasks`}</h2>
             </div>
             <button className="modal-close" onClick={onClose} aria-label="Close">
@@ -709,7 +740,7 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10, taskLabel, loadin
             )}
           </div>
         </div>
-        <div className="modal-body">
+        <div className="modal-body" style={completedMode ? {background:'#fff'} : undefined}>
           {loading ? (
             <div style={{padding: 48, textAlign: 'center', color: 'var(--ink-muted)'}}>Loading…</div>
           ) : (

@@ -484,6 +484,9 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .badge.warn .badge-dot { background: var(--warn); }
 .badge.bad { background: var(--bad-bg); color: oklch(0.42 0.16 25); }
 .badge.bad .badge-dot { background: var(--bad); }
+/* SLA%-click badge — trigger for Completed Tasks drill-through only */
+.badge--sla-trigger { transition: filter .15s; }
+.badge--sla-trigger:hover { filter: brightness(0.7); }
 
 .card-stats {
   display: grid;
@@ -880,13 +883,13 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .tooltip-row .swatch { width: 8px; height: 8px; border-radius: 2px; }
 
 /* ─── Info Tooltip ─────────────────────────────────────────────────────────── */
-/* Small inline ⓘ icon that shows a plain-English explanation bubble on hover. */
+/* Small inline ⓘ icon — click to toggle explanation bubble (outside-click + ESC closes). */
 .info-tip {
   position: relative;
   display: inline-flex;
   align-items: center;
   vertical-align: middle;
-  cursor: help;
+  cursor: pointer;
   color: var(--ink-muted);
   flex-shrink: 0;
   margin-left: 4px;
@@ -911,7 +914,8 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
   flex-shrink: 0;
 }
 .info-tip:hover .info-tip-icon,
-.info-tip:focus .info-tip-icon { opacity: 1; }
+.info-tip:focus .info-tip-icon,
+.info-tip[aria-expanded="true"] .info-tip-icon { opacity: 1; }
 
 /* Portal bubble — rendered into document.body, position:fixed so it escapes
    any parent overflow:hidden / stacking context. */
