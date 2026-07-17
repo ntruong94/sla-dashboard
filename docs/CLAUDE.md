@@ -106,7 +106,7 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 
 > **Date scope (SLA % only):** Overall KPI SLA% and history chart use `DateCompleted >= 'YYYY-MM-DD' AND DateCompleted < 'next-day'`. Per-team card SLA% uses `DateCreated >= 'YYYY-MM-DD' AND DateCreated < 'next-day'` (same scope as all other per-team metrics). See SLA% Rule below.
 > **Delta scope:** today value − prev biz day value. Same per-metric date columns and status filters.
-> **Team scope filter (all metrics):** `(ct.UsedForKPI = 1 AND ct.SpecifiedKPIGrp non-empty) OR (ct.UsedForKPI IS NULL AND ct.SpecifiedKPIGrp IS NULL AND s.DepartmentId IN (101, 110, 122, 10) AND s.EmployeeStatus = 1)` — `TEAM_FILTER` constant. Rule 1 branch: KPI-flagged tasks with a non-empty `SpecifiedKPIGrp`. Rule 2 branch: fully-unclassified tasks assigned to a fallback-dept team's active staff (ids 1, 2, 4, 9). All queries use `LEFT JOIN Staff s ON t.AssignedTo = s.StaffID` and `LEFT JOIN ConfigTasks ct ON t.ConfigTaskId = ct.ConfigTaskId`.
+> **Team scope filter (all metrics):** Built dynamically by `getTeamFilter()` in `backend/server.js` — not a static constant. Rule 1 branch: `ct.UsedForKPI = 1 AND non-empty SpecifiedKPIGrp` (KPI teams). Rule 2 branch: `ct.UsedForKPI IS NULL AND SpecifiedKPIGrp IS NULL/empty AND s.DepartmentId IN (<all dept IDs from _allTeams>)` (Dept teams). The dept ID list is rebuilt on every `refreshAllTeams()` cycle so new departments appear automatically. All queries use `LEFT JOIN Staff s ON t.AssignedTo = s.StaffID` and `LEFT JOIN ConfigTasks ct ON t.ConfigTaskId = ct.ConfigTaskId`.
 
 > **SLA% Rule (2026-07-16 — updated):**
 >
@@ -135,73 +135,41 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 
 ## 6. Dashboard Teams
 
-The dashboard maps **9 defined teams** identified via `ConfigTasks.UsedForKPI = 1` and `ConfigTasks.SpecifiedKPIGrp` LIKE patterns, plus optional **dynamic teams** auto-discovered from the database.
+> ⛔ **HARD RULE — UPDATED 2026-07-17: NEVER hardcode team names, team IDs, department IDs, or `SpecifiedKPIGrp` LIKE patterns in `backend/server.js` or anywhere else. There is NO static `TEAMS` array. All teams are discovered dynamically from the DB every 60 seconds. If you need to reference a team, look it up at runtime via `getAllTeams()`. To add a new team, add a row to `ConfigTasks` (set `UsedForKPI=1` and populate `SpecifiedKPIGrp`) or ensure the department has active staff — no code change is ever required.**
 
-| id | Dashboard Name | Department | SLA Target | kpiGrp pattern | Fallback Department |
-|----|---------------|------------|------------|----------------|---------------------|
-| 1 | Data Entry | Origination | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Data%Entry%'` | `fallbackDeptId=101` |
-| 2 | Valuations | Origination | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Valuation%'` | `fallbackDeptId=110` |
-| 3 | Assessments | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Assessment%'` | *no fallback — KPI-tagged tasks exist in DB* |
-| 4 | Packaging & QA | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Packaging%' OR ct.SpecifiedKPIGrp LIKE N'%QA%'` | `fallbackDeptId=122` |
-| 5 | CLA | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%CLA%'` | *no fallback — KPI-tagged tasks exist in DB* |
-| 6 | Funder Submission | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Funder%Submission%'` | *no fallback — KPI-tagged tasks exist in DB* |
-| 7 | Funder MIR | Credit | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Funder%MIR%'` | *no fallback — KPI-tagged tasks exist in DB* |
-| 8 | Settlement | Settlement | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Settlement%'` | *no fallback — KPI-tagged tasks exist in DB* |
-| 9 | Ezy Client Care | Client Care | 4 hours | `ct.SpecifiedKPIGrp LIKE N'%Client%Care%'` | `fallbackDeptId=10` |
+The dashboard discovers **all teams fully dynamically** from two DB sources every 60 seconds:
 
-> **UPDATED 2026-06-25** — Refactored from 8 teams (DepartmentId/REPORT_Loans_Extension) to 9 teams using `ConfigTasks.UsedForKPI`/`SpecifiedKPIGrp`.
-> **UPDATED 2026-06-30** — Two-tier classification: kpiGrp-primary WHENs now fire **first** (explicit SpecifiedKPIGrp match wins); DeptId-primary WHENs are the fallback for unclassified tasks.
-> **UPDATED 2026-07-01** — Fallback `DepartmentId` added only for teams with **no** `UsedForKPI=1` records in the DB (Data Entry → 101, Valuations → 110, Packaging & QA → 122, Ezy Client Care → 10). Teams that already have KPI-tagged records (Assessments, CLA, Funder Submission, Funder MIR, Settlement) intentionally have **no** dept fallback — counts stay to the explicitly-tagged tasks only, avoiding inflation from unrelated dept staff work. Valuations kpiGrp broadened to `LIKE N'%Valuation%'` (Pre‑ exclusion removed). Fallback (Rule 2) tightened to require `ct.UsedForKPI IS NULL` **and** `ct.SpecifiedKPIGrp IS NULL/empty`.
+| Source | Team type | How identified | ID range |
+|--------|-----------|----------------|----------|
+| `ConfigTasks WHERE UsedForKPI=1` | **KPI team** (`isKpi:true`) | Each distinct `SpecifiedKPIGrp` value (exact match after `LTRIM`/`RTRIM`) | `nameToTeamId(name)` — hash-stable integer 1000–8999 |
+| `Department` + `Staff WHERE EmployeeStatus=1` | **Dept team** (`isDept:true`) | Each `DepartmentId` with at least one active staff member | `DepartmentId + 10000` |
 
-> **GROUPING PRIORITY (source of truth — updated 2026-07-01):** Every team / group calculation across the dashboard (team cards, All Teams, SLA / Volume / TAT / Overdue metrics, charts, legends, drill-throughs, popups, tables, filters, aggregates) follows this exact two-step rule:
+- **Team names come directly from the DB** — `SpecifiedKPIGrp` for KPI teams, `Department.Name` for dept teams. No display-name mapping in code.
+- **Default SLA target = 4 hours** for every team. Overridable per team via Settings.
+- **New teams appear automatically** within ~60 s whenever a new `SpecifiedKPIGrp` is added to `ConfigTasks` or a new department gets active staff — no code change, no restart.
+- Team IDs are stable per name (hash for KPI, DeptId+10000 for dept) so saved SLA targets survive when new teams are added.
+
+> **GROUPING PRIORITY (source of truth — updated 2026-07-17):** Every team / group calculation across the dashboard (team cards, All Teams, SLA / Volume / TAT / Overdue metrics, charts, legends, drill-throughs, popups, tables, filters, aggregates) follows this exact two-step rule:
 >
-> 1. **Rule 1 — KPI group (PRIORITY):** If a task has `ct.UsedForKPI = 1` **AND** `ct.SpecifiedKPIGrp` is non-null and non-empty (after `LTRIM`/`RTRIM`), it is grouped by `SpecifiedKPIGrp` (static team pattern match, or auto-discovered dynamic team). Card / table / drill-through labels use `SpecifiedKPIGrp`.
-> 2. **Rule 2 — Department FALLBACK:** Only tasks where **`ct.UsedForKPI IS NULL` AND `ct.SpecifiedKPIGrp IS NULL/empty`** fall back to `s.DepartmentId`. Fallback requires `s.EmployeeStatus = 1`.
+> 1. **Rule 1 — KPI group (PRIORITY):** If a task has `ct.UsedForKPI = 1` **AND** `ct.SpecifiedKPIGrp` is non-null and non-empty (after `LTRIM`/`RTRIM`), it is grouped by exact `SpecifiedKPIGrp` value. The matching KPI team is the one whose `kpiGrp` expression equals `LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'<name>'`.
+> 2. **Rule 2 — Department FALLBACK:** Only tasks where **`ct.UsedForKPI IS NULL` AND `ct.SpecifiedKPIGrp IS NULL/empty`** fall back to `s.DepartmentId`. Matched against the dept team whose `fallbackDeptId = s.DepartmentId`. Requires `s.EmployeeStatus = 1`.
 >
-> Rule 1 and Rule 2 are mutually exclusive by construction, so a task is **never counted twice**. Any task that satisfies neither rule (e.g. `UsedForKPI=1` with a non-matching kpiGrp, or `UsedForKPI IS NULL` with a non-null kpiGrp) is **excluded entirely** — it does not pollute dept fallback counts.
+> Rule 1 and Rule 2 are mutually exclusive — a task is **never counted twice**. Any task that satisfies neither rule is excluded entirely.
 >
-> **Automatic recalculation:** All calculations reflect the current state of `ConfigTasks` on the next cache refresh (5-min TTL) — no code or config change is required. When a task moves from `(UsedForKPI IS NULL + kpiGrp IS NULL)` into `(UsedForKPI=1 + kpiGrp populated)`, it stops being counted under its dept fallback team and starts being counted under its `SpecifiedKPIGrp` team; the reverse is also automatic.
->
-> SQL CASE precedence enforces this naturally — Rule 1 WHENs are listed first (all 9 static teams + any dynamic teams), Rule 2 WHENs are listed second (only for teams with a `fallbackDeptId`). A task always matches **at most one** WHEN.
+> **Automatic recalculation:** All calculations reflect the current state of `ConfigTasks` on the next cache refresh (60 s) — no code or config change is required.
 
-**Dynamic teams (auto-discovery):**
-- **Whenever a `ConfigTasks` row has `UsedForKPI = 1` and a non-null, non-empty `SpecifiedKPIGrp` value that does not match any of the 9 defined team patterns, the dashboard automatically surfaces that group as a new team card with full KPI data — no code changes or config edits required.**
-- Discovery runs at backend startup and on every 5-minute teams cache refresh (`refreshDynamicGroups()` called at the start of `fetchTeamsData()`).
-- Group names are normalized via `LTRIM`/`RTRIM` in SQL and `.trim()` in JS before use, so leading/trailing whitespace differences in the DB do not create duplicate cards.
-- IDs start at 100, sorted alphabetically for stability (e.g., first new group = id 100, second = 101).
-- Card name = trimmed `SpecifiedKPIGrp` value from the database.
-- Dynamic team cards appear **after "Ezy Client Care"** (after id=9) in all views.
-- KPI calculations (volume, SLA %, avg TAT, overdue, deltas, history, alerts) follow the same logic as static teams — scoped to `LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'<name>'`.
-- Default SLA target = 4 hours; users can override via Settings after the card appears.
-
-**Backend implementation:** `TEAMS` array and helper functions in `backend/server.js`.
-- `TEAMS` (static array, 9 entries): each team has `{ id, name, dept, target, kpiGrp, fallbackDeptId }`.
-- `_dynamicTeams` (runtime array): populated by `refreshDynamicGroups()`, same shape as TEAMS entries plus `isDynamic: true`.
-- `getAllTeams()`: returns `[...TEAMS, ..._dynamicTeams]` — used in all SQL building and result mapping.
-- `getTeamIdCase()`: builds SQL CASE for team id (all static + dynamic teams).
-- `getTeamNameCase()`: builds SQL CASE for team name (all static + dynamic teams).
-- **Team classification — two-tier system (2026-06-30):** Teams are split into two types based on whether `fallbackDeptId` is set in the `TEAMS` array:
-  - **DeptId-primary** (ids 1, 2, 4, 9 — `fallbackDeptId` set): `WHEN s.DepartmentId = N AND s.EmployeeStatus = 1` fires **first** in `getTeamIdCase()` / `getTeamNameCase()`. All tasks assigned to staff in that department are captured regardless of `SpecifiedKPIGrp`. Current DeptIds: Data Entry=101, Valuations=110, Packaging & QA=122, Ezy Client Care=10.
-  - **kpiGrp-primary** (ids 3, 5, 6, 7, 8 — no `fallbackDeptId`): Only `UsedForKPI=1` tasks whose `SpecifiedKPIGrp` matches the kpiGrp pattern are counted. `Staff.DepartmentId` is never used for classification.
-  - **Dynamic teams** (ids 100+): Always kpiGrp-primary — exact `SpecifiedKPIGrp` match only, no fallback.
-- **`getTeamIdCase()` / `getTeamNameCase()` WHEN order (updated 2026-06-30 — grouping priority):** Rule 1 (kpiGrp pattern) WHENs fire **first** for both kpiPrimary and deptPrimary teams: `WHEN ct.UsedForKPI = 1 AND <kpiGrp pattern> THEN <id>`. Rule 2 (DeptId fallback) WHENs fire **second** and apply only when `SpecifiedKPIGrp` is NULL/empty: `WHEN (ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'') AND s.DepartmentId = <N> AND s.EmployeeStatus = 1 THEN <id>`. Rule 2 does **not** require `ct.UsedForKPI = 1` — it captures tasks where both `UsedForKPI` and `SpecifiedKPIGrp` are NULL (typical of unclassified/legacy tasks). The two rules together never double-count because the WHEN conditions are mutually exclusive (Rule 1 requires non-empty kpiGrp, Rule 2 requires NULL/empty kpiGrp).
-- `TEAM_FILTER` constant: `((ct.UsedForKPI = 1) OR ((ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'') AND s.DepartmentId IN (<fallbackDeptIds>) AND s.EmployeeStatus = 1))` — admits Rule 1 tasks via the first branch and Rule 2 fallback candidates via the second branch. The `<fallbackDeptIds>` list is built dynamically from `TEAMS.filter(t => t.fallbackDeptId)`. Tasks with non-NULL `SpecifiedKPIGrp` that don't match any Rule 1 pattern are filtered out entirely — they are not assigned to any team.
+**Backend implementation:** `_allTeams` runtime array and helper functions in `backend/server.js`.
+- `_allTeams` (runtime array, initially empty): populated by `refreshAllTeams()`. Each entry has `{ id, name, dept, target, kpiGrp, fallbackDeptId, isKpi|isDept }`.
+- `refreshAllTeams()`: queries ConfigTasks (KPI groups) and Department+Staff (dept teams) in parallel. Called at startup and every 60 s via `setInterval`. Invalidates teams cache on any change.
+- `getAllTeams()`: returns `_allTeams` — used in all SQL building and result mapping.
+- `getTeamIdCase()`: builds SQL CASE using `isKpi` teams first (Rule 1, exact match), then `isDept` teams (Rule 2, DeptId match). Returns `'WHEN 1=0 THEN NULL'` when empty (safe during cold start).
+- `getTeamNameCase()`: same structure as `getTeamIdCase()` but returns team name string.
+- `getTeamIdCaseForConfigTasks()`: KPI teams only (no Staff join needed); used by Q4 in `fetchTeamsData` for task-code tooltip data.
+- `getTeamFilter()`: **function** (not a constant) — builds the SQL filter admitting Rule 1 tasks + Rule 2 tasks for all known dept IDs. Dept ID list is rebuilt from `_allTeams` on every call.
+- `nameToTeamId(name)`: djb2 hash → integer in [1000, 8999]. Stable per name regardless of how many other groups exist.
 - `CONFIG_TASKS_JOIN` constant: `LEFT JOIN ConfigTasks ct WITH (NOLOCK) ON t.ConfigTaskId = ct.ConfigTaskId` — injected into all aggregate queries.
-- The `?team=<id>` query param on `/api/tasks` and `/api/alert-tasks/:teamId` accepts team id 1–9 (static) or 100+ (dynamic); all routed through `getAllTeams().find(...)`.
-- `TEAM_COLORS` in `constants.js`: Proxy object — 9 known names return `var(--t1)…var(--t9)`; unknown names (dynamic teams) return colors from `_DYNAMIC_PALETTE` (`#1F7A8C`, `#B5446E`, `#556B2F`, `#8B4513`, `#4169E1`, `#8B008B`), assigned by order of first lookup.
-- CSS vars in `styles.css`: `--t1:#0F9ED5` `--t2:#4EA72E` `--t3:#E97132` `--t4:#0E2841` `--t5:#7E350E` `--t6:#F6508F` `--t7:#7030A0` `--t8:#C00000` `--t9:#808080`
-- **Exact team order and hex colors (authoritative):**
-  | # | Team Name | Hex Color |
-  |---|-----------|-----------|
-  | 1 | Data Entry | `#0F9ED5` |
-  | 2 | Valuations | `#4EA72E` |
-  | 3 | Assessments | `#E97132` |
-  | 4 | Packaging & QA | `#0E2841` |
-  | 5 | CLA | `#7E350E` |
-  | 6 | Funder Submission | `#F6508F` |
-  | 7 | Funder MIR | `#7030A0` |
-  | 8 | Settlement | `#C00000` |
-  | 9 | Ezy Client Care | `#808080` |
+- The `?team=<id>` query param on `/api/tasks` and `/api/alert-tasks/:teamId` accepts any team id; routed through `getAllTeams().find(...)`.
+- `TEAM_COLORS` in `constants.js`: Proxy object — colors assigned from `_DYNAMIC_PALETTE` by insertion order. No hardcoded name-to-color mapping.
 - Chart lines `strokeWidth="2.5"`; dots `r=4` (hover `r=6`) in both `trend.jsx` and `history-chart.jsx`
 
 ---
