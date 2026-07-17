@@ -118,6 +118,14 @@ export const getStaffByDepartment = (deptId) => request(`/api/staff/department/$
 
 export const getTaskCodes = () => request('/api/task-codes');
 
+// ── SSE data-change stream ───────────────────────────────────────────────────
+// Creates an EventSource that receives "data-changed" invalidation events.
+// Caller is responsible for cleanup (call .close() on the returned object).
+// JWT is passed as a query param because EventSource does not support custom headers.
+export function connectDataStream() {
+  return new EventSource(`${BASE}/api/events?token=${encodeURIComponent(getToken())}`);
+}
+
 export const getTasks = (teamId, status, scope, targets = {}) => {
   const params = new URLSearchParams();
   if (teamId != null) params.set('team', teamId);

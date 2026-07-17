@@ -381,6 +381,53 @@ function getCached(key, fetchFn) {
   return Promise.reject(new Error(`[cache ${key}] no data and no pending fetch`));
 }
 
+// --- Server-Sent Events (SSE) push infrastructure ----------------------------
+// Clients connect via GET /api/events (JWT passed as ?token= query param because
+// the browser EventSource API does not support custom request headers).
+// A lightweight DB fingerprint is polled every 30 s when clients are connected.
+// When today's active-task data changes the cache is invalidated and all clients
+// receive an "data-changed" event; they re-fetch via normal authenticated endpoints.
+const sseClients     = new Set();  // active SSE response objects
+let   _changeTimer   = null;       // setInterval handle; null when no clients connected
+let   _lastFingerprint = null;     // last fingerprint string; null forces baseline on connect
+
+function broadcastDataChanged() {
+  if (sseClients.size === 0) return;
+  const payload = `event: data-changed\ndata: ${JSON.stringify({ ts: Date.now() })}\n\n`;
+  const dead = [];
+  for (const c of sseClients) {
+    try { c.write(payload); } catch { dead.push(c); }
+  }
+  dead.forEach(c => sseClients.delete(c));
+}
+
+async function checkForChanges() {
+  if (sseClients.size === 0) return;
+  try {
+    const pool = await connectDB();
+    const { today, todayNext } = computeDates();
+    // Lightweight fingerprint: row count + weighted checksum over active tasks today.
+    // Detects new tasks, status changes, and TotalHoursOnTask / SLAAdjustedDate updates.
+    const r = await pool.request().query(`
+      SELECT COUNT(*) AS n,
+             ISNULL(SUM(CAST(TaskStatusID AS BIGINT) * 3 + TaskID % 997), 0) AS chk
+      FROM   Tasks WITH (NOLOCK)
+      WHERE  TaskStatusID IN (1,2,4,5,6)
+        AND  DateCreated >= '${today}' AND DateCreated < '${todayNext}'
+    `);
+    const fp = `${r.recordset[0].n}:${r.recordset[0].chk}`;
+    if (_lastFingerprint !== null && fp !== _lastFingerprint) {
+      _cache.kpi.ts   = 0; // invalidate so next request fetches fresh data
+      _cache.teams.ts = 0;
+      broadcastDataChanged();
+      console.log(`[sse] data changed → notified ${sseClients.size} client(s)`);
+    }
+    _lastFingerprint = fp;
+  } catch (err) {
+    console.warn('[sse] change-check failed:', err.message);
+  }
+}
+
 async function fetchKpiData(customTargets = {}, visibleTeamIds = null) {
   const NOW_SQL = getNowSql();
   const pool = await connectDB();
@@ -1769,6 +1816,44 @@ app.put('/api/admin/settings', requireAdmin, express.json(), async (req, res) =>
   };
   saveGlobalTeamConfigToDB().catch(() => {});
   res.json(_globalTeamConfig);
+});
+
+// --- SSE push endpoint -------------------------------------------------------
+// EventSource cannot send custom headers so the JWT is passed as ?token= query param.
+// The endpoint emits invalidation signals only (no business data).
+app.get('/api/events', (req, res) => {
+  try { jwt.verify(req.query.token || '', JWT_SECRET); } catch {
+    return res.status(401).end();
+  }
+  res.setHeader('Content-Type',      'text/event-stream');
+  res.setHeader('Cache-Control',     'no-cache');
+  res.setHeader('Connection',        'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable nginx/Cloudflare buffering
+  res.flushHeaders();
+
+  res.write('event: connected\ndata: {}\n\n');
+  sseClients.add(res);
+
+  // Start change-detection timer on first client connection
+  if (!_changeTimer) {
+    _changeTimer = setInterval(checkForChanges, 30000);
+    checkForChanges(); // establish baseline fingerprint immediately
+  }
+
+  // Keepalive comment every 25 s — prevents proxies/browsers closing idle SSE streams
+  const ping = setInterval(() => {
+    try { res.write(':keepalive\n\n'); } catch { /* ignore closed */ }
+  }, 25000);
+
+  req.on('close', () => {
+    sseClients.delete(res);
+    clearInterval(ping);
+    if (sseClients.size === 0 && _changeTimer) {
+      clearInterval(_changeTimer);
+      _changeTimer     = null;
+      _lastFingerprint = null; // reset so reconnect re-establishes baseline
+    }
+  });
 });
 
 app.use('/api/kpi-summary',   requireAuth);

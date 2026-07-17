@@ -1587,3 +1587,74 @@ Before deploying, verify:
 - [ ] `resolveEffectiveDate()` is called in `app.listen` callback on startup
 - [ ] `setInterval(resolveEffectiveDate, 60 * 60 * 1000)` is active for hourly refresh
 - [ ] No `TODAY_FIXED`, `hardcoded_date`, or similar constants exist anywhere in `backend/` or `frontend/src/`
+
+---
+
+## 29. Auto-Refresh — Real-Time Data Updates (Added 2026-07-17)
+
+Dashboard data updates automatically when the underlying database changes. Users never need to manually reload the page.
+
+### 29.1 Mechanism
+
+**Primary — SSE push (Server-Sent Events):**
+- Frontend connects to `GET /api/events` via `EventSource` on login.
+- JWT is passed as `?token=` query param (EventSource does not support custom headers).
+- Backend polls a lightweight DB fingerprint every **30 seconds** while clients are connected:
+  ```sql
+  SELECT COUNT(*) AS n,
+         ISNULL(SUM(CAST(TaskStatusID AS BIGINT) * 3 + TaskID % 997), 0) AS chk
+  FROM   Tasks WITH (NOLOCK)
+  WHERE  TaskStatusID IN (1,2,4,5,6)
+    AND  DateCreated >= '<today>' AND DateCreated < '<tomorrow>'
+  ```
+- If `n` or `chk` changes (new tasks, status changes, TotalHoursOnTask updates), backend:
+  1. Invalidates `_cache.kpi.ts` and `_cache.teams.ts`
+  2. Broadcasts `event: data-changed` to all connected clients
+  3. Logs `[sse] data changed → notified N client(s)`
+- Client receives the event, debounces 200 ms (coalesces bursts), then calls `refreshData()`.
+- A 25-second keepalive comment (`:keepalive`) prevents proxy/browser SSE timeouts.
+
+**Fallback — interval polling:**
+- The existing `settings.refreshMin` interval (default 5 min) continues running as a guaranteed fallback.
+- If SSE is unavailable (connection error, proxy timeout), the client auto-reconnects every 5 seconds.
+- Polling ensures updates even if SSE is blocked by a firewall or proxy.
+
+**Tab visibility refresh:**
+- When the browser tab becomes visible after being hidden (`visibilitychange` event), `refreshData()` is called immediately to catch any changes that occurred while the tab was in the background.
+
+### 29.2 Race condition prevention
+
+`refreshSeqRef` (a `useRef(0)` in `App.jsx`) is incremented on every `refreshData()` call. The `.then()` handler checks `seq !== refreshSeqRef.current` and discards any stale concurrent response — only the most recent in-flight request can update state.
+
+### 29.3 Server-side change detection timer lifecycle
+
+- Timer starts on first SSE client connection; stops when last client disconnects.
+- `_lastFingerprint` is reset to `null` on stop, so the next connection re-establishes a clean baseline.
+- No DB polling occurs when no clients are connected.
+
+### 29.4 Scope
+
+All dashboard surfaces refresh atomically together from a single `Promise.all`:
+- KPI summary cards
+- Team performance cards
+- Task tables (all-tasks + today-scoped modal)
+- Alerts panel
+- Loan summary cards
+
+History chart is NOT included in the auto-refresh cycle (it is a slow 400-day scan and does not change intra-day).
+
+### 29.5 Surfaces NOT refreshed automatically
+
+- Open drill-through modals / popups (team card click, SLA% badge click, alert drill-down) — these require explicit user interaction to re-open.
+- History chart — refreshed only on settings change or page load.
+
+### 29.6 Key files
+
+| File | Purpose |
+|------|---------|
+| `backend/server.js` — `sseClients`, `broadcastDataChanged()`, `checkForChanges()` | SSE infrastructure |
+| `backend/server.js` — `GET /api/events` | SSE endpoint (JWT validated from `?token=`) |
+| `frontend/src/api.js` — `connectDataStream()` | Creates EventSource for the client |
+| `frontend/src/App.jsx` — SSE `useEffect` | Connects, debounces, reconnects |
+| `frontend/src/App.jsx` — visibility `useEffect` | Refresh on tab focus |
+| `frontend/src/App.jsx` — `refreshSeqRef` | Race condition guard |

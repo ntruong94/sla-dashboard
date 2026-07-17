@@ -2,7 +2,7 @@
 import '../styles.css';
 import '../styles-views.css';
 import MezyIconDark from './MezyIcon_Dark';
-import { getKpiSummary, getTeams, getTasks, getHistory, getAlerts, getLoanSummary, getLoanDetail, getUserSettings, putUserSettings, getGlobalSettings, saveGlobalSettings } from './api';
+import { getKpiSummary, getTeams, getTasks, getHistory, getAlerts, getLoanSummary, getLoanDetail, getUserSettings, putUserSettings, getGlobalSettings, saveGlobalSettings, connectDataStream } from './api';
 import { Icon } from './components/icons.jsx';
 import { KpiTile, TeamCard, AlertsPanel, TaskModal, InfoTip, LoanKpiTile, LoanModal } from './components/components.jsx';
 import { TrendChart } from './components/trend.jsx';
@@ -280,6 +280,7 @@ export default function App() {
   const teamsRef            = useRef([]);
   const globalTeamConfigRef = useRef({ hiddenTeams: [], groupOrder: [], version: 0 });
   const userRoleRef         = useRef(userRole);
+  const refreshSeqRef       = useRef(0); // incremented on every refresh; stale responses are discarded
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { teamsRef.current = teams; },    [teams]);
   useEffect(() => { globalTeamConfigRef.current = globalTeamConfig; }, [globalTeamConfig]);
@@ -307,7 +308,9 @@ export default function App() {
 
   // Shared refresh function — reads targets from settingsRef so the interval
   // always uses the latest configured values without recreating on every settings change.
+  // refreshSeqRef prevents a slower in-flight response from overwriting a newer one.
   const refreshData = useCallback(() => {
+    const seq     = ++refreshSeqRef.current;
     const targets = settingsRef.current?.targets || {};
     Promise.all([
       getKpiSummary(targets),
@@ -318,6 +321,7 @@ export default function App() {
       getLoanSummary(),
     ])
       .then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {
+        if (seq !== refreshSeqRef.current) return; // discard stale concurrent response
         setKpi(kpiData);
         setTeams(teamsData);
         setRawTasks(tasksData);
@@ -374,12 +378,54 @@ export default function App() {
       });
   }, [authed]);
 
-  // Auto-refresh every settings.refreshMin minutes (non-disruptive — no page reload)
+  // Auto-refresh every settings.refreshMin minutes — guaranteed fallback if SSE is unavailable.
   useEffect(() => {
     const ms = (settings.refreshMin || 5) * 60 * 1000;
     const t  = setInterval(refreshData, ms);
     return () => clearInterval(t);
   }, [settings.refreshMin, refreshData]);
+
+  // SSE push — server sends "data-changed" when DB fingerprint changes (every 30 s check).
+  // Debounced 200 ms to coalesce burst signals. Auto-reconnects on error (5 s backoff).
+  // Falls back gracefully to interval polling above if SSE is unavailable.
+  useEffect(() => {
+    if (!authed) return;
+    let es            = null;
+    let reconnectTimer = null;
+    let debounceTimer  = null;
+    let stopped        = false;
+
+    function connect() {
+      if (stopped) return;
+      es = connectDataStream();
+      es.addEventListener('data-changed', () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => { if (!stopped) refreshData(); }, 200);
+      });
+      es.onerror = () => {
+        es.close();
+        es = null;
+        if (!stopped) reconnectTimer = setTimeout(connect, 5000);
+      };
+    }
+
+    connect();
+    return () => {
+      stopped = true;
+      clearTimeout(reconnectTimer);
+      clearTimeout(debounceTimer);
+      if (es) es.close();
+    };
+  }, [authed, refreshData]);
+
+  // Refresh immediately when the browser tab becomes visible — catches any changes
+  // that occurred while the tab was in the background (SSE and polling both paused).
+  useEffect(() => {
+    if (!authed) return;
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshData(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [authed, refreshData]);
 
   // Poll global team config every 15 s — lightweight version check.
   // When admin saves changes the version increments; all sessions recompute
