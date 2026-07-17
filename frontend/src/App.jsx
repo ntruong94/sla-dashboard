@@ -66,7 +66,7 @@ function normalizeTask(t, settings = {}) {
     // Active task — new canonical overdue rule:
     // Overdue if TotalHoursOnTask > per-task SLAInHours, OR current time > SLAAdjustedDate (when set)
     const taskSlaH = t.SLAInHours != null ? Number(t.SLAInHours) : null;
-    const cond1    = taskSlaH != null && taskSlaH > 0 && tatH > taskSlaH;
+    const cond1    = (taskSlaH != null && taskSlaH > 0 && tatH > taskSlaH) || tatH > slaH;
     const adjTs    = parseDMYLocal(t.SLAAdjustedDte);
     const cond2    = adjTs != null && Date.now() > adjTs;
     if (cond1 || cond2)    { status = 'bad';  }
@@ -312,8 +312,8 @@ export default function App() {
     Promise.all([
       getKpiSummary(targets),
       getTeams(targets),
-      getTasks(),
-      getTasks(null, null, 'today'),
+      getTasks(null, null, null, targets),
+      getTasks(null, null, 'today', targets),
       getAlerts(targets),
       getLoanSummary(),
     ])
@@ -346,8 +346,8 @@ export default function App() {
     Promise.all([
       getKpiSummary(targets),
       getTeams(targets),
-      getTasks(),
-      getTasks(null, null, 'today'),
+      getTasks(null, null, null, targets),
+      getTasks(null, null, 'today', targets),
       getAlerts(targets),
       getLoanSummary(),
     ])
@@ -444,8 +444,8 @@ export default function App() {
     Promise.all([
       getKpiSummary(targets),
       getTeams(targets),
-      getTasks(),
-      getTasks(null, null, 'today'),
+      getTasks(null, null, null, targets),
+      getTasks(null, null, 'today', targets),
       getAlerts(targets),
       getLoanSummary(),
     ]).then(([kpiData, teamsData, tasksData, modalTasksData, alertsData, loanData]) => {

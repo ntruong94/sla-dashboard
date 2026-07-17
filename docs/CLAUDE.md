@@ -75,29 +75,29 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 > - **Target value (all tasks):** Team's configured SLA target from Settings (`settings.targets[teamId]`); default 4h. Per-task `t.SLAInHours` is **not** used as the target baseline for the TAT bar or status calculation.
 > - **Null `TotalHoursOnTask`:** TAT display is **blank** (no substituted 0). The task is excluded from all TAT averages, overdue counts, and at-risk calculations; status defaults to `'ok'`. In all TAT vs Target table cells, when `TotalHoursOnTask` is null the cell shows `/ Xh target` right-aligned (target only, no TAT value, no progress bar) — applied in `TaskRow`, `AlertDrillTable`, `AlertsPanel` inline table, and `TasksView`. When TAT is non-null, the cell shows `X.Xh / Xh target` (both value and target with "target" suffix) — all 4 tables use the same `/ Xh target` suffix format.
 
-> **Overdue Rule (2026-07-15 — updated):** A task is counted as OVERDUE when ALL of the following apply:
+> **Overdue Rule (2026-07-17 — updated):** A task is counted as OVERDUE when ALL of the following apply:
 > - Active tasks only: `TaskStatusID IN (1,4,5,6)`
 > - Date-scoped by each widget's existing `DateCreated` context
-> - `TotalHoursOnTask IS NOT NULL AND TotalHoursOnTask > 0` (null and zero excluded)
 >
-> AND **one or both** of these overdue conditions is true:
-> 1. `TotalHoursOnTask > 0 AND TotalHoursOnTask > t.SLAInHours` (TAT exceeded target — requires non-zero recorded time)
-> 2. `SLAAdjustedDate IS NOT NULL AND GETDATE() > SLAAdjustedDate` (adjusted deadline has passed — fires regardless of TotalHoursOnTask)
+> AND **any** of these three conditions is true:
+> - **A) `TotalHoursOnTask > SLAInHours`** — per-task SLA field. Only evaluated when `TotalHoursOnTask IS NOT NULL AND TotalHoursOnTask <> 0`.
+> - **B) `GETDATE() > SLAAdjustedDate`** — adjusted deadline has passed. Only evaluated when `SLAAdjustedDate IS NOT NULL`. Fires regardless of `TotalHoursOnTask` value (including 0 or null). `GETDATE()` is real-time current datetime at runtime.
+> - **C) `TotalHoursOnTask > TeamSlaTargetHours`** — team's configured SLA target from the Settings tab. Only evaluated when `TotalHoursOnTask IS NOT NULL AND TotalHoursOnTask <> 0`.
 >
-> **Important:** Condition 2 is independent of `TotalHoursOnTask`. A task with 0.0h or null TAT is still OVERDUE if its adjusted deadline has passed. Only condition 1 requires `TotalHoursOnTask > 0`.
->
-> SQL condition:
+> Canonical SQL condition (all active-overdue locations):
 > ```sql
-> AND ((t.TotalHoursOnTask > 0 AND t.TotalHoursOnTask > t.SLAInHours)
+> AND ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0
+>       AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr}))
 >      OR (t.SLAAdjustedDate IS NOT NULL AND GETDATE() > t.SLAAdjustedDate))
 > ```
+> where `${targetExpr}` = `buildTargetExpr(customTargets)` (CASE expression returning team-configured target, falling back to `t.SLAInHours`). When no custom target is configured `targetExpr = t.SLAInHours`, making A and C equivalent.
 >
-> Applied to: KPI overdue count, KPI prev-day delta, team card overdue count, team card delta, tasks view `status='bad'` CASE and filter, alerts query `overdue` count, alert-tasks drill-down overdue UNION branch.
-> At-risk UNION branch adds `AND NOT (<overdue condition>)` to prevent double-counting.
+> Applied to: KPI overdue count, KPI prev-day delta, team card overdue count, team card delta, tasks view `status='bad'` CASE and filter, alerts query `overdue` count, alert-tasks drill-down overdue UNION branch, `normalizeTask()` active-task branch in `App.jsx` (conditions A+C via `tatH > slaH || tatH > taskSlaH`, condition B via `Date.now() > adjTs`).
+> At-risk UNION branch adds `AND NOT (...)` with the same three conditions to prevent double-counting.
 >
-> **EXCEPTION:** The **SLA% badge click — Completed Tasks Drill-Through table** is NOT affected. That table uses `DateCompleted`-based compliance logic and its status calculation remains unchanged.
+> **EXCEPTION — Completed Tasks Drill-Through (SLA% badge click):** DO NOT apply this rule there. That table/cards use `DateCompleted`-based compliance logic — overdue = `TotalHoursOnTask > SLAInHours` OR `DateCompleted > SLAAdjustedDate`. Status calculation and cards remain unchanged.
 >
-> Note: Overall SLA% KPI and history chart still use the `SLAAdjustedDate` fallback against `DateCompleted` — those are separate compliance metrics unaffected by this change. Per-team card SLA% now uses `DateCreated` scope and the same `TotalHoursOnTask ≤ SLAInHours` formula as the completed-tasks drill-through modal.
+> Note: Overall SLA% KPI and history chart still use the `SLAAdjustedDate` fallback against `DateCompleted` — those are separate compliance metrics unaffected by this change. Per-team card SLA% uses `DateCreated` scope and `TotalHoursOnTask ≤ SLAInHours` formula — unchanged.
 
 > **At Risk Rule (2026-06-12):** A task is at risk if:
 > - Real-time TAT >= `atRiskFraction × SLA target` AND TAT <= SLA target AND SLAAdjustedDate has not passed.

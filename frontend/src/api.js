@@ -118,11 +118,12 @@ export const getStaffByDepartment = (deptId) => request(`/api/staff/department/$
 
 export const getTaskCodes = () => request('/api/task-codes');
 
-export const getTasks = (teamId, status, scope) => {
+export const getTasks = (teamId, status, scope, targets = {}) => {
   const params = new URLSearchParams();
   if (teamId != null) params.set('team', teamId);
   if (status)         params.set('status', status);
   if (scope)          params.set('scope', scope);
+  Object.entries(targets).forEach(([id, h]) => { if (h > 0) params.set(`t${id}`, h); });
   const qs = params.toString();
   return request('/api/tasks' + (qs ? '?' + qs : ''));
 };
