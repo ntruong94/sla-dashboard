@@ -52,31 +52,33 @@ function loadSettingsFromStorage(email) {
 }
 
 function normalizeTask(t, settings = {}) {
-  // TAT = TotalHoursOnTask; null = blank display and excluded from all TAT calcs.
+  // TAT = TotalHoursOnTask_BH; null = blank display and excluded from all TAT calcs.
   // Target (TAT bar + at-risk warn) = team's configured SLA target from Settings; default 4h.
-  const tatH    = t.TotalHoursOnTask ?? null;
+  const tatH    = t.TotalHoursOnTask_BH ?? null;
   const slaH    = settings.targets?.[t.QueueId] || 4;
   const atRisk  = (settings.atRiskPct ?? 87.5) / 100;
   const pct     = (tatH != null && slaH > 0) ? tatH / slaH : 0;
   const parseDMYLocal = s => { if (!s) return null; const [date, time='00:00:00'] = s.split(' '); const [d,m,y] = date.split('/'); return new Date(`${y}-${m}-${d}T${time}`).getTime(); };
   let status;
-  if (tatH == null || tatH === 0) {
-    status = 'ok';
-  } else if (!t.CompletedDte) {
-    // Active task — new canonical overdue rule:
-    // Overdue if TotalHoursOnTask > per-task SLAInHours, OR current time > SLAAdjustedDate (when set)
-    const taskSlaH = t.SLAInHours != null ? Number(t.SLAInHours) : null;
-    const cond1    = (taskSlaH != null && taskSlaH > 0 && tatH > taskSlaH) || tatH > slaH;
-    const adjTs    = parseDMYLocal(t.SLAAdjustedDte);
-    const cond2    = adjTs != null && Date.now() > adjTs;
-    if (cond1 || cond2)    { status = 'bad';  }
-    else if (pct >= atRisk){ status = 'warn'; }
-    else                   { status = 'ok';   }
+  const adjTs = parseDMYLocal(t.SLAAdjustedDte);
+  if (!t.CompletedDte) {
+    // Active task — canonical overdue rule (CLAUDE.md §5):
+    // Condition B fires regardless of TAT value (including null/0): GETDATE() > SLAAdjustedDate.
+    const condB = adjTs != null && Date.now() > adjTs;
+    if (tatH == null || tatH === 0) {
+      // No TAT — only condition B can make it overdue.
+      status = condB ? 'bad' : 'ok';
+    } else {
+      const taskSlaH = t.SLAInHours != null ? Number(t.SLAInHours) : null;
+      const condA_C  = (taskSlaH != null && taskSlaH > 0 && tatH > taskSlaH) || tatH > slaH;
+      if (condA_C || condB) { status = 'bad';  }
+      else if (pct >= atRisk){ status = 'warn'; }
+      else                   { status = 'ok';   }
+    }
   } else {
     // Completed task (SLA% badge click drill-through)
-    // Overdue: TotalHoursOnTask > SLAInHours (per-task, when non-null), OR DateCompleted > SLAAdjustedDate
+    // Overdue: TotalHoursOnTask_BH > SLAInHours (per-task, when non-null), OR DateCompleted > SLAAdjustedDate
     const taskSlaH = t.SLAInHours != null ? Number(t.SLAInHours) : null;
-    const adjTs    = parseDMYLocal(t.SLAAdjustedDte);
     const compTs   = parseDMYLocal(t.CompletedDte);
     const cCond1   = tatH != null && taskSlaH != null && taskSlaH > 0 && tatH > taskSlaH;
     const cCond2   = adjTs != null && compTs != null && compTs > adjTs;
@@ -97,7 +99,7 @@ function normalizeTask(t, settings = {}) {
     ? (loanStatusDetail || t.ShortDescription || '-')
     : (t.TaskName || t.ClientName || t.AssignedToName || '-');
   
-  // Completed tasks display TAT: TotalHoursOnTask (primary) or DATEDIFF(SLAAdjustedDate, CompletedDate) (fallback)
+  // Completed tasks display TAT: TotalHoursOnTask_BH (primary) or DATEDIFF(SLAAdjustedDate, CompletedDate) (fallback)
   let displayTatH = tatH;
   if (t.CompletedDte && tatH === null && t.SLAAdjustedDte) {
     const adjTsF  = parseDMYLocal(t.SLAAdjustedDte);
@@ -121,7 +123,7 @@ function normalizeTask(t, settings = {}) {
     appId:          t.ApplicationID != null ? t.ApplicationID : null,
     taskStatus:     t.TaskStatus || null,
     onHoldHours:    t.TotalHoursOnHold != null ? Math.round(parseFloat(t.TotalHoursOnHold) * 10) / 10 : null,
-    onTaskHours:    t.TotalHoursOnTask != null ? Math.round(parseFloat(t.TotalHoursOnTask) * 10) / 10 : null,
+    onTaskHours:    t.TotalHoursOnTask_BH != null ? Math.round(parseFloat(t.TotalHoursOnTask_BH) * 10) / 10 : null,
     slaInHours:     t.SLAInHours != null ? Number(t.SLAInHours) : null,
   };
 }

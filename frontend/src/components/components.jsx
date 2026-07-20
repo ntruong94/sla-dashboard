@@ -1,4 +1,4 @@
-import React from 'react';
+﻿import React from 'react';
 import ReactDOM from 'react-dom';
 import { Icon } from './icons.jsx';
 import { slaClass, slaLabel, TOOLTIPS } from '../constants.js';
@@ -237,10 +237,10 @@ const AlertDrillTable = ({ rows }) => {
     if (col === 'desc')      return (t.StaffFullName?.trim()) || t.ShortDescription || '';
     if (col === 'slaHours')  return t.SLAInHours != null ? Number(t.SLAInHours) : null;
     if (col === 'onHold')    return t.TotalHoursOnHold ?? null;
-    if (col === 'onTask')    return t.TotalHoursOnTask ?? null;
+    if (col === 'onTask')    return t.TotalHoursOnTask_BH ?? null;
     if (col === 'current')   return t.TaskStatus || '';
     if (col === 'status')    return t.taskType === 'overdue' ? 0 : 1;
-    if (col === 'tat')       return t.TotalHoursOnTask ?? t.TatHours ?? 0;
+    if (col === 'tat')       return t.TotalHoursOnTask_BH ?? t.TatHours ?? 0;
     if (col === 'priority')  return ({high:0,med:1,low:2}[String(t.Priority||'').toLowerCase()] ?? 3);
     return '';
   });
@@ -266,7 +266,7 @@ const AlertDrillTable = ({ rows }) => {
         {sorted.map(t => {
           const status = alertStatusInfoVal(t.taskType);
           const target = t.TargetHours != null ? Number(t.TargetHours) : (t.SLAInHours != null ? Number(t.SLAInHours) : 0);
-          const tat = t.TotalHoursOnTask != null ? Number(t.TotalHoursOnTask) : (t.TatHours != null ? Number(t.TatHours) : null);
+          const tat = t.TotalHoursOnTask_BH != null ? Number(t.TotalHoursOnTask_BH) : (t.TatHours != null ? Number(t.TatHours) : null);
           const pct = (tat != null && target > 0) ? Math.min(tat / target, 1.6) : 0;
           const desc = (t.StaffFullName && t.StaffFullName.trim())
             ? t.StaffFullName.trim()
@@ -292,7 +292,7 @@ const AlertDrillTable = ({ rows }) => {
               </td>
               <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.SLAInHours != null ? Number(t.SLAInHours) : '-'}</span></td>
               <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnHold != null ? parseFloat(t.TotalHoursOnHold).toFixed(1) : '-'}</span></td>
-              <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnTask != null ? parseFloat(t.TotalHoursOnTask).toFixed(1) : '-'}</span></td>
+              <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnTask_BH != null ? parseFloat(t.TotalHoursOnTask_BH).toFixed(1) : '-'}</span></td>
               <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.TaskStatus || '-'}</span></td>
               <td style={{whiteSpace:'nowrap'}}>
                 <span className={`pill ${status.cls}`}>
@@ -450,7 +450,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                             {rows.map(t => {
                               const status = alertStatusInfo(t.taskType);
                               const target = t.TargetHours != null ? Number(t.TargetHours) : (t.SLAInHours != null ? Number(t.SLAInHours) : 0);
-                              const tat = t.TotalHoursOnTask != null ? Number(t.TotalHoursOnTask) : (t.TatHours != null ? Number(t.TatHours) : null);
+                              const tat = t.TotalHoursOnTask_BH != null ? Number(t.TotalHoursOnTask_BH) : (t.TatHours != null ? Number(t.TatHours) : null);
                               const pct = (tat != null && target > 0) ? Math.min(tat / target, 1.6) : 0;
                               const desc = (t.StaffFullName && t.StaffFullName.trim())
                                 ? t.StaffFullName.trim()
@@ -475,7 +475,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                                     <div className="task-client">{t.ShortDescription || '-'}</div>
                                   </td>
                                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnHold != null ? parseFloat(t.TotalHoursOnHold).toFixed(1) : '-'}</span></td>
-                                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnTask != null ? parseFloat(t.TotalHoursOnTask).toFixed(1) : '-'}</span></td>
+                                  <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnTask_BH != null ? parseFloat(t.TotalHoursOnTask_BH).toFixed(1) : '-'}</span></td>
                                   <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.TaskStatus || '-'}</span></td>
                                   <td style={{whiteSpace:'nowrap'}}>
                                     <span className={`pill ${status.cls}`}>
@@ -658,12 +658,12 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10, taskLabel, loadin
     if (!completedMode || tasks.length === 0) return null;
     const vals = tasks.map(t => {
       const tat = t.tatHours;
-      // Primary: TotalHoursOnTask when positive (non-null, non-zero, non-negative)
+      // Primary: TotalHoursOnTask_BH when positive (non-null, non-zero, non-negative)
       // Negative tatHours means the normalizeTask fallback computed (CompletedDate - SLAAdjustedDate)
       // which is negative when completed before the adjusted deadline — exclude from avg TAT
       if (tat != null && isFinite(tat) && tat > 0) return tat;
       // Fallback: (CompletedDateTime - DateCreatedDateTime) in hours
-      // when TotalHoursOnTask IS NULL or zero, both dates present
+      // when TotalHoursOnTask_BH IS NULL or zero, both dates present
       // DateCreated=today is guaranteed by the API filter for this drill-through
       if (t.completedDte && t.createDte) {
         const createTs = parseDMY(t.createDte);

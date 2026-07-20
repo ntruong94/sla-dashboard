@@ -73,7 +73,7 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 > - **Open (active) tasks:** TAT = `DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0` — elapsed calendar hours from task creation to now.
 > - **Closed (completed) tasks:** TAT = `DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0` — elapsed calendar hours from creation to completion.
 >
-> The `TotalHoursOnTask` stored column is **no longer used** for any TAT, overdue, or at-risk calculation (it was NULL for ~98% of active tasks). All calculations now use the DATEDIFF formula.
+> The `TotalHoursOnTask_BH` stored column is **no longer used** for any TAT, overdue, or at-risk calculation (it was NULL for ~98% of active tasks). All calculations now use the DATEDIFF formula.
 
 > **Overdue Rule (2026-06-18 — updated):** A task is overdue when:
 > Real-time TAT (`DATEDIFF(MINUTE, DateCreated, GETDATE()) / 60.0`) exceeds the team's configured SLA target hours.
@@ -242,8 +242,8 @@ The dashboard maps **9 defined teams** identified via `ConfigTasks.UsedForKPI = 
 
 | Table | Purpose | Important Columns |
 |-------|---------|------------------|
-| `Tasks` | Main work unit tracked for SLA | TaskID, ConfigTaskId, TaskName, TaskStatusID, AssignedTo, SLAInHours, SoEzySLA, SoEzySLA_BH, TotalHoursOnTask, TotalHoursOnTask_BH |
-| `TaskRelation` | Task time tracking | TaskRelationID, TaskID, TotalHoursOnTask, TotalHoursOnTask_BH, SLARemaining |
+| `Tasks` | Main work unit tracked for SLA | TaskID, ConfigTaskId, TaskName, TaskStatusID, AssignedTo, SLAInHours, SoEzySLA, SoEzySLA_BH, TotalHoursOnTask_BH, TotalHoursOnTask_BH |
+| `TaskRelation` | Task time tracking | TaskRelationID, TaskID, TotalHoursOnTask_BH, TotalHoursOnTask_BH, SLARemaining |
 | `ConfigQueue` | Team / queue lookup | QueueId, QueueName |
 | `ConfigTaskStatus` | Task status values | ConfigTaskStatusID, TaskStatus |
 | `ConfigSLA` | SLA configuration | SLAId, SLAName, SLADescription |
@@ -262,7 +262,7 @@ The dashboard maps **9 defined teams** identified via `ConfigTasks.UsedForKPI = 
 | `SLAInHours` | SLA target in hours for this task type |
 | `SoEzySLA` | SLA tracking value from the So Ezy system |
 | `SoEzySLA_BH` | Business-hours variant of SLA |
-| `TotalHoursOnTask` | Actual time spent on task (calendar hours) |
+| `TotalHoursOnTask_BH` | Actual time spent on task (calendar hours) |
 | `TotalHoursOnTask_BH` | Actual time spent (business hours only) |
 | `SLARemaining` | Remaining SLA time (in TaskRelation table) |
 | `IsSLACheckPointOnHold` | Whether SLA is paused at a checkpoint (in ConfigLoanStatus) |
@@ -286,32 +286,32 @@ SELECT
   -- Overdue: open tasks created today that exceeded SLA target
   SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29'
            AND TaskStatusID IN (1,4,5,6)
-           AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END)        AS totalOverdue,
+           AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END)        AS totalOverdue,
 
   -- SLA %: completed tasks within target ÷ total completed × 100 (spec formula)
   CAST(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29'
                AND TaskStatusID = 2
-               AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+               AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29'
                       AND TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS overallSla,
 
   -- Avg TAT: mean across all tasks created today (active + completed)
   AVG(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29'
-           THEN TotalHoursOnTask ELSE NULL END)                         AS avgTat,
+           THEN TotalHoursOnTask_BH ELSE NULL END)                         AS avgTat,
 
   -- ── Same 4 metrics for prev biz day (2026-05-27) — used for delta arrows ──
   SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
            AND TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END)            AS prevTasks,
   SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
            AND TaskStatusID IN (1,4,5,6)
-           AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END)        AS prevOverdue,
+           AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END)        AS prevOverdue,
   CAST(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
                AND TaskStatusID = 2
-               AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+               AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
                       AND TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS prevSla,
   AVG(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
-           THEN TotalHoursOnTask ELSE NULL END)                         AS prevTat
+           THEN TotalHoursOnTask_BH ELSE NULL END)                         AS prevTat
 
 FROM Tasks t WITH (NOLOCK)
 WHERE TaskStatusID IN (1, 2, 4, 5, 6)
@@ -328,12 +328,12 @@ SELECT
   -- volume: active tasks only
   SUM(CASE WHEN TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END)           AS volume,
   -- sla: completed tasks within target ÷ total completed × 100
-  CAST(SUM(CASE WHEN TaskStatusID = 2 AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+  CAST(SUM(CASE WHEN TaskStatusID = 2 AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS sla,
   -- avgTat: all tasks
-  AVG(TotalHoursOnTask)                                                 AS avgTat,
+  AVG(TotalHoursOnTask_BH)                                                 AS avgTat,
   -- overdue: open tasks past SLA target
-  SUM(CASE WHEN TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END) AS overdue
+  SUM(CASE WHEN TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END) AS overdue
 FROM Tasks t WITH (NOLOCK)
 INNER JOIN ConfigFunction cf WITH (NOLOCK) ON t.FunctionID = cf.FunctionID
 WHERE TaskStatusID IN (1, 2, 4, 5, 6)
@@ -346,14 +346,14 @@ SELECT
   CASE <TEAM_ID_CASE> END AS teamId,
   SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS todayVol,
   SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS prevVol,
-  SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END) AS todayOverdue,
-  SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END) AS prevOverdue,
-  CAST(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID = 2 AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+  SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END) AS todayOverdue,
+  SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END) AS prevOverdue,
+  CAST(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID = 2 AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS todaySla,
-  CAST(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID = 2 AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+  CAST(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID = 2 AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS prevSla,
-  AVG(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' THEN TotalHoursOnTask ELSE NULL END) AS todayTat,
-  AVG(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' THEN TotalHoursOnTask ELSE NULL END) AS prevTat
+  AVG(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' THEN TotalHoursOnTask_BH ELSE NULL END) AS todayTat,
+  AVG(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' THEN TotalHoursOnTask_BH ELSE NULL END) AS prevTat
 FROM Tasks t WITH (NOLOCK)
 INNER JOIN ConfigFunction cf WITH (NOLOCK) ON t.FunctionID = cf.FunctionID
 WHERE TaskStatusID IN (1, 2, 4, 5, 6)
@@ -415,7 +415,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 ## 13. Assumptions
 
 1. **CONFIRMED:** Teams map to `QueueId` values in `ConfigQueue` — via `Tasks → ConfigFunction → QueueID` join (not direct). See Section 6 for full mapping.
-2. **CONFIRMED:** A task is "within SLA" when `TotalHoursOnTask <= SLAInHours` (both columns confirmed present in Tasks table).
+2. **CONFIRMED:** A task is "within SLA" when `TotalHoursOnTask_BH <= SLAInHours` (both columns confirmed present in Tasks table).
 3. **CONFIRMED:** Active tasks = `TaskStatusID IN (1,4,5,6)` (InProgress, OnHold, OnQueue, NotQueued). Completed = `TaskStatusID = 2`.
 4. **CONFIRMED:** Tasks links to ConfigQueue via `Tasks.FunctionID → ConfigFunction.FunctionID → ConfigFunction.QueueID`.
 5. **CONFIRMED:** Tasks table has `DateCreated` and `DateCompleted` columns (both used in delta queries).
@@ -433,7 +433,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 | 3 | DateCreated / DateCompleted columns? | RESOLVED — both confirmed present and used in delta queries. |
 | 4 | Active/open TaskStatusID values? | RESOLVED — active: `IN (1,4,5,6)`, completed: `= 2`. |
 | 5 | SLA target from ConfigSLA or hardcoded? | RESOLVED (partial) — hardcoded 4h for all teams. ConfigSLA values not yet checked. |
-| 6 | SLAInHours or SoEzySLA for compliance? | RESOLVED — using `TotalHoursOnTask <= SLAInHours` (confirmed working in live queries). |
+| 6 | SLAInHours or SoEzySLA for compliance? | RESOLVED — using `TotalHoursOnTask_BH <= SLAInHours` (confirmed working in live queries). |
 | 7 | SQL Server connection details? | RESOLVED — server `DESKTOP-HGGDDCR`, DB `MySEReport`, user `ntruong`, port 1433. |
 | 8 | Drill-through modal showing summary stats but no task rows? | RESOLVED (2026-06-17) — Bug was TEAM_ID_CASE SQL expression precedence. When tasks matched both a DepartmentId AND a ConfigLoanStatus, the dept filter was checked first, causing wrong QueueId assignment. Fixed by reordering CASE conditions: loan_status filters first (teams 5-6), then dept filters (teams 1-4,7-8). Verified end-to-end: `/api/tasks?team=6` now returns 7 Funder Submission tasks with QueueId=6, and modal renders all 7 rows correctly. |
 

@@ -62,32 +62,32 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 |-----|-------------|---------------|-----------|
 | Total Active Tasks | Count of open tasks created **today** | `IN (1,4,5,6)` active only | `SUM(... AND TaskStatusID IN (1,4,5,6))` |
 | Overall SLA % | `((tasks completed within target) OR (tasks completed by SLAAdjustedDate) ÷ total tasks completed) × 100` — **DateCompleted** basis | `= 2` completed only | `SUM(CASE WHEN (DATEDIFF(MINUTE, DateCreated, DateCompleted) / 60.0 <= targetExpr OR (SLAAdjustedDate IS NOT NULL AND DateCompleted <= SLAAdjustedDate)) THEN 1 ELSE 0 END) / NULLIF(SUM(1), 0) * 100` scoped to `DateCompleted = today` |
-| Avg Turnaround (TAT) | Mean `TotalHoursOnTask` for **active** tasks created today (null/0 excluded) | `IN (1,4,5,6)` active only | `AVG(CASE WHEN TotalHoursOnTask IS NOT NULL AND TotalHoursOnTask <> 0 THEN TotalHoursOnTask ELSE NULL END)` scoped to active tasks (`fetchKpiData` Q1) |
-| Overdue / Breached | Count of **open** tasks created today that are overdue | `IN (1,4,5,6)` active only | `SUM(... AND TotalHoursOnTask > 0 AND (TotalHoursOnTask > SLAInHours OR (SLAAdjustedDate IS NOT NULL AND GETDATE() > SLAAdjustedDate)))` |
+| Avg Turnaround (TAT) | Mean `TotalHoursOnTask_BH` for **active** tasks created today (null/0 excluded) | `IN (1,4,5,6)` active only | `AVG(CASE WHEN TotalHoursOnTask_BH IS NOT NULL AND TotalHoursOnTask_BH <> 0 THEN TotalHoursOnTask_BH ELSE NULL END)` scoped to active tasks (`fetchKpiData` Q1) |
+| Overdue / Breached | Count of **open** tasks created today that are overdue | `IN (1,4,5,6)` active only | `SUM(... AND TotalHoursOnTask_BH > 0 AND (TotalHoursOnTask_BH > SLAInHours OR (SLAAdjustedDate IS NOT NULL AND GETDATE() > SLAAdjustedDate)))` |
 | Per-Team Volume | Active task count per team, scoped to `DateCreated = today` | `IN (1,4,5,6)` active only | `/api/teams` query 1, grouped by DepartmentId CASE |
-| Per-Team SLA % | `(tasks where TotalHoursOnTask ≤ SLAInHours AND DateCompleted ≤ SLAAdjustedDate when set) ÷ total completed × 100` per team — **DateCreated** basis (same as all other per-team metrics) | `= 2` completed only | separate SLA query (Q3 in `fetchTeamsData`) using `(TotalHoursOnTask IS NULL OR TotalHoursOnTask <= SLAInHours) AND (SLAAdjustedDate IS NULL OR DateCompleted <= SLAAdjustedDate)`, grouped by TEAM_ID_CASE, scoped to `DateCreated = today`. Matches completed-tasks drill-through modal SLA%. |
-| Per-Team Avg TAT | Mean `TotalHoursOnTask` per team for active tasks today (null/0 excluded) | `IN (1,4,5,6)` active only | `AVG(CASE WHEN TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask IS NOT NULL AND TotalHoursOnTask <> 0 THEN TotalHoursOnTask ELSE NULL END)` (Q1 in `fetchTeamsData`) |
+| Per-Team SLA % | `(tasks where TotalHoursOnTask_BH ≤ SLAInHours AND DateCompleted ≤ SLAAdjustedDate when set) ÷ total completed × 100` per team — **DateCreated** basis (same as all other per-team metrics) | `= 2` completed only | separate SLA query (Q3 in `fetchTeamsData`) using `(TotalHoursOnTask_BH IS NULL OR TotalHoursOnTask_BH <= SLAInHours) AND (SLAAdjustedDate IS NULL OR DateCompleted <= SLAAdjustedDate)`, grouped by TEAM_ID_CASE, scoped to `DateCreated = today`. Matches completed-tasks drill-through modal SLA%. |
+| Per-Team Avg TAT | Mean `TotalHoursOnTask_BH` per team for active tasks today (null/0 excluded) | `IN (1,4,5,6)` active only | `AVG(CASE WHEN TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask_BH IS NOT NULL AND TotalHoursOnTask_BH <> 0 THEN TotalHoursOnTask_BH ELSE NULL END)` (Q1 in `fetchTeamsData`) |
 | Per-Team Overdue | Open tasks past SLA target per team, today | `IN (1,4,5,6)` active only | same query 1 |
 
 > **TAT Rule (2026-07-16 — updated):**
-> - **Avg TAT metric (KPI tile, team cards, deltas) — active tasks only:** `TotalHoursOnTask` — the stored DB field, scoped to active tasks (`TaskStatusID IN (1,4,5,6)`) only. Tasks where `TotalHoursOnTask IS NULL OR TotalHoursOnTask = 0.00` are excluded from the average denominator and numerator. `DATEDIFF` elapsed-time formula is **no longer used** for any task type in Avg TAT metric calculations.
-> - **TAT value in per-task drill-through tables (TAT vs Target column):** `TotalHoursOnTask` — applies to all active-task drill-through tables (`TaskRow`, `AlertDrillTable`, `AlertsPanel` inline table, `TasksView`). Completed-tasks drill-through (SLA % badge click) uses its own separate TAT logic — see that section.
+> - **Avg TAT metric (KPI tile, team cards, deltas) — active tasks only:** `TotalHoursOnTask_BH` — the stored DB field, scoped to active tasks (`TaskStatusID IN (1,4,5,6)`) only. Tasks where `TotalHoursOnTask_BH IS NULL OR TotalHoursOnTask_BH = 0.00` are excluded from the average denominator and numerator. `DATEDIFF` elapsed-time formula is **no longer used** for any task type in Avg TAT metric calculations.
+> - **TAT value in per-task drill-through tables (TAT vs Target column):** `TotalHoursOnTask_BH` — applies to all active-task drill-through tables (`TaskRow`, `AlertDrillTable`, `AlertsPanel` inline table, `TasksView`). Completed-tasks drill-through (SLA % badge click) uses its own separate TAT logic — see that section.
 > - **Target value (all tasks):** Team's configured SLA target from Settings (`settings.targets[teamId]`); default 4h. Per-task `t.SLAInHours` is **not** used as the target baseline for the TAT bar or status calculation.
-> - **Null `TotalHoursOnTask`:** TAT display is **blank** (no substituted 0). The task is excluded from all TAT averages, overdue counts, and at-risk calculations; status defaults to `'ok'`. In all TAT vs Target table cells, when `TotalHoursOnTask` is null the cell shows `/ Xh target` right-aligned (target only, no TAT value, no progress bar) — applied in `TaskRow`, `AlertDrillTable`, `AlertsPanel` inline table, and `TasksView`. When TAT is non-null, the cell shows `X.Xh / Xh target` (both value and target with "target" suffix) — all 4 tables use the same `/ Xh target` suffix format.
+> - **Null `TotalHoursOnTask_BH`:** TAT display is **blank** (no substituted 0). The task is excluded from all TAT averages, overdue counts, and at-risk calculations; status defaults to `'ok'`. In all TAT vs Target table cells, when `TotalHoursOnTask_BH` is null the cell shows `/ Xh target` right-aligned (target only, no TAT value, no progress bar) — applied in `TaskRow`, `AlertDrillTable`, `AlertsPanel` inline table, and `TasksView`. When TAT is non-null, the cell shows `X.Xh / Xh target` (both value and target with "target" suffix) — all 4 tables use the same `/ Xh target` suffix format.
 
 > **Overdue Rule (2026-07-17 — updated):** A task is counted as OVERDUE when ALL of the following apply:
 > - Active tasks only: `TaskStatusID IN (1,4,5,6)`
 > - Date-scoped by each widget's existing `DateCreated` context
 >
 > AND **any** of these three conditions is true:
-> - **A) `TotalHoursOnTask > SLAInHours`** — per-task SLA field. Only evaluated when `TotalHoursOnTask IS NOT NULL AND TotalHoursOnTask <> 0`.
-> - **B) `GETDATE() > SLAAdjustedDate`** — adjusted deadline has passed. Only evaluated when `SLAAdjustedDate IS NOT NULL`. Fires regardless of `TotalHoursOnTask` value (including 0 or null). `GETDATE()` is real-time current datetime at runtime.
-> - **C) `TotalHoursOnTask > TeamSlaTargetHours`** — team's configured SLA target from the Settings tab. Only evaluated when `TotalHoursOnTask IS NOT NULL AND TotalHoursOnTask <> 0`.
+> - **A) `TotalHoursOnTask_BH > SLAInHours`** — per-task SLA field. Only evaluated when `TotalHoursOnTask_BH IS NOT NULL AND TotalHoursOnTask_BH <> 0`.
+> - **B) `GETDATE() > SLAAdjustedDate`** — adjusted deadline has passed. Only evaluated when `SLAAdjustedDate IS NOT NULL`. Fires regardless of `TotalHoursOnTask_BH` value (including 0 or null). `GETDATE()` is real-time current datetime at runtime.
+> - **C) `TotalHoursOnTask_BH > TeamSlaTargetHours`** — team's configured SLA target from the Settings tab. Only evaluated when `TotalHoursOnTask_BH IS NOT NULL AND TotalHoursOnTask_BH <> 0`.
 >
 > Canonical SQL condition (all active-overdue locations):
 > ```sql
-> AND ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0
->       AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr}))
+> AND ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0
+>       AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${targetExpr}))
 >      OR (t.SLAAdjustedDate IS NOT NULL AND GETDATE() > t.SLAAdjustedDate))
 > ```
 > where `${targetExpr}` = `buildTargetExpr(customTargets)` (CASE expression returning team-configured target, falling back to `t.SLAInHours`). When no custom target is configured `targetExpr = t.SLAInHours`, making A and C equivalent.
@@ -95,9 +95,9 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 > Applied to: KPI overdue count, KPI prev-day delta, team card overdue count, team card delta, tasks view `status='bad'` CASE and filter, alerts query `overdue` count, alert-tasks drill-down overdue UNION branch, `normalizeTask()` active-task branch in `App.jsx` (conditions A+C via `tatH > slaH || tatH > taskSlaH`, condition B via `Date.now() > adjTs`).
 > At-risk UNION branch adds `AND NOT (...)` with the same three conditions to prevent double-counting.
 >
-> **EXCEPTION — Completed Tasks Drill-Through (SLA% badge click):** DO NOT apply this rule there. That table/cards use `DateCompleted`-based compliance logic — overdue = `TotalHoursOnTask > SLAInHours` OR `DateCompleted > SLAAdjustedDate`. Status calculation and cards remain unchanged.
+> **EXCEPTION — Completed Tasks Drill-Through (SLA% badge click):** DO NOT apply this rule there. That table/cards use `DateCompleted`-based compliance logic — overdue = `TotalHoursOnTask_BH > SLAInHours` OR `DateCompleted > SLAAdjustedDate`. Status calculation and cards remain unchanged.
 >
-> Note: Overall SLA% KPI and history chart still use the `SLAAdjustedDate` fallback against `DateCompleted` — those are separate compliance metrics unaffected by this change. Per-team card SLA% uses `DateCreated` scope and `TotalHoursOnTask ≤ SLAInHours` formula — unchanged.
+> Note: Overall SLA% KPI and history chart still use the `SLAAdjustedDate` fallback against `DateCompleted` — those are separate compliance metrics unaffected by this change. Per-team card SLA% uses `DateCreated` scope and `TotalHoursOnTask_BH ≤ SLAInHours` formula — unchanged.
 
 > **At Risk Rule (2026-06-12):** A task is at risk if:
 > - Real-time TAT >= `atRiskFraction × SLA target` AND TAT <= SLA target AND SLAAdjustedDate has not passed.
@@ -116,7 +116,7 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 > 2. `SLAAdjustedDate IS NOT NULL AND DateCompleted <= SLAAdjustedDate`
 >
 > **Per-team card SLA%** (`fetchTeamsData` Q3) — `DateCreated` scope (same as all other per-team metrics); compliant when **both**:
-> 1. `TotalHoursOnTask IS NULL OR TotalHoursOnTask <= SLAInHours`
+> 1. `TotalHoursOnTask_BH IS NULL OR TotalHoursOnTask_BH <= SLAInHours`
 > 2. `SLAAdjustedDate IS NULL OR DateCompleted <= SLAAdjustedDate`
 >
 > This matches exactly the completed-tasks drill-through modal so the badge % and modal % always show the same number.
@@ -124,13 +124,13 @@ The prototype already defines all 6 views in `frontend/src/components/views.jsx`
 > -- Per-team Q3 (fetchTeamsData):
 > CAST(
 >   SUM(CASE WHEN t.TaskStatusID = 2
->            AND (t.TotalHoursOnTask IS NULL OR t.TotalHoursOnTask <= t.SLAInHours)
+>            AND (t.TotalHoursOnTask_BH IS NULL OR t.TotalHoursOnTask_BH <= t.SLAInHours)
 >            AND (t.SLAAdjustedDate IS NULL OR t.DateCompleted <= t.SLAAdjustedDate)
 >            THEN 1 ELSE 0 END) AS FLOAT
 > ) / NULLIF(SUM(CASE WHEN t.TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100
 > ```
 > Filtered by `t.DateCreated >= 'YYYY-MM-DD' AND t.DateCreated < 'next-day'`.
-> `fetchKpiData()` runs Overall SLA% as a separate parallel query (Q2). `fetchTeamsData()` runs per-team SLA% as Q3. `fetchHistoryData()` uses the **same formula as Q3** — `DateCreated` scope, `TotalHoursOnTask IS NULL OR TotalHoursOnTask <= SLAInHours` compliance, `SLAAdjustedDate IS NULL OR DateCompleted <= SLAAdjustedDate` adjusted-deadline check. This ensures the 7-Day Trend chart, Compliance · Last N days chart, and 7-day Avg stats table all match the values shown on the team performance cards.
+> `fetchKpiData()` runs Overall SLA% as a separate parallel query (Q2). `fetchTeamsData()` runs per-team SLA% as Q3. `fetchHistoryData()` uses the **same formula as Q3** — `DateCreated` scope, `TotalHoursOnTask_BH IS NULL OR TotalHoursOnTask_BH <= SLAInHours` compliance, `SLAAdjustedDate IS NULL OR DateCompleted <= SLAAdjustedDate` adjusted-deadline check. This ensures the 7-Day Trend chart, Compliance · Last N days chart, and 7-day Avg stats table all match the values shown on the team performance cards.
 
 ---
 
@@ -241,8 +241,8 @@ The dashboard discovers **all teams fully dynamically** from two DB sources ever
 
 | Table | Purpose | Important Columns |
 |-------|---------|------------------|
-| `Tasks` | Main work unit tracked for SLA | TaskID, ConfigTaskId, TaskName, TaskStatusID, AssignedTo, SLAInHours, SoEzySLA, SoEzySLA_BH, TotalHoursOnTask, TotalHoursOnTask_BH |
-| `TaskRelation` | Task time tracking | TaskRelationID, TaskID, TotalHoursOnTask, TotalHoursOnTask_BH, SLARemaining |
+| `Tasks` | Main work unit tracked for SLA | TaskID, ConfigTaskId, TaskName, TaskStatusID, AssignedTo, SLAInHours, SoEzySLA, SoEzySLA_BH, TotalHoursOnTask_BH, TotalHoursOnTask_BH |
+| `TaskRelation` | Task time tracking | TaskRelationID, TaskID, TotalHoursOnTask_BH, TotalHoursOnTask_BH, SLARemaining |
 | `ConfigQueue` | Team / queue lookup | QueueId, QueueName |
 | `ConfigTaskStatus` | Task status values | ConfigTaskStatusID, TaskStatus |
 | `ConfigSLA` | SLA configuration | SLAId, SLAName, SLADescription |
@@ -261,7 +261,7 @@ The dashboard discovers **all teams fully dynamically** from two DB sources ever
 | `SLAInHours` | SLA target in hours for this task type |
 | `SoEzySLA` | SLA tracking value from the So Ezy system |
 | `SoEzySLA_BH` | Business-hours variant of SLA |
-| `TotalHoursOnTask` | Actual time spent on task (calendar hours) |
+| `TotalHoursOnTask_BH` | Actual time spent on task (calendar hours) |
 | `TotalHoursOnTask_BH` | Actual time spent (business hours only) |
 | `SLARemaining` | Remaining SLA time (in TaskRelation table) |
 | `IsSLACheckPointOnHold` | Whether SLA is paused at a checkpoint (in ConfigLoanStatus) |
@@ -285,32 +285,32 @@ SELECT
   -- Overdue: open tasks created today that exceeded SLA target
   SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29'
            AND TaskStatusID IN (1,4,5,6)
-           AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END)        AS totalOverdue,
+           AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END)        AS totalOverdue,
 
   -- SLA %: completed tasks within target ÷ total completed × 100 (spec formula)
   CAST(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29'
                AND TaskStatusID = 2
-               AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+               AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29'
                       AND TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS overallSla,
 
   -- Avg TAT: mean across all tasks created today (active + completed)
   AVG(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29'
-           THEN TotalHoursOnTask ELSE NULL END)                         AS avgTat,
+           THEN TotalHoursOnTask_BH ELSE NULL END)                         AS avgTat,
 
   -- ── Same 4 metrics for prev biz day (2026-05-27) — used for delta arrows ──
   SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
            AND TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END)            AS prevTasks,
   SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
            AND TaskStatusID IN (1,4,5,6)
-           AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END)        AS prevOverdue,
+           AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END)        AS prevOverdue,
   CAST(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
                AND TaskStatusID = 2
-               AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+               AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
                       AND TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS prevSla,
   AVG(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28'
-           THEN TotalHoursOnTask ELSE NULL END)                         AS prevTat
+           THEN TotalHoursOnTask_BH ELSE NULL END)                         AS prevTat
 
 FROM Tasks t WITH (NOLOCK)
 WHERE TaskStatusID IN (1, 2, 4, 5, 6)
@@ -327,12 +327,12 @@ SELECT
   -- volume: active tasks only
   SUM(CASE WHEN TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END)           AS volume,
   -- sla: completed tasks within target ÷ total completed × 100
-  CAST(SUM(CASE WHEN TaskStatusID = 2 AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+  CAST(SUM(CASE WHEN TaskStatusID = 2 AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS sla,
   -- avgTat: all tasks
-  AVG(TotalHoursOnTask)                                                 AS avgTat,
+  AVG(TotalHoursOnTask_BH)                                                 AS avgTat,
   -- overdue: open tasks past SLA target
-  SUM(CASE WHEN TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END) AS overdue
+  SUM(CASE WHEN TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END) AS overdue
 FROM Tasks t WITH (NOLOCK)
 INNER JOIN ConfigFunction cf WITH (NOLOCK) ON t.FunctionID = cf.FunctionID
 WHERE TaskStatusID IN (1, 2, 4, 5, 6)
@@ -345,14 +345,14 @@ SELECT
   CASE <TEAM_ID_CASE> END AS teamId,
   SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS todayVol,
   SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS prevVol,
-  SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END) AS todayOverdue,
-  SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask > SLAInHours THEN 1 ELSE 0 END) AS prevOverdue,
-  CAST(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID = 2 AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+  SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END) AS todayOverdue,
+  SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID IN (1,4,5,6) AND TotalHoursOnTask_BH > SLAInHours THEN 1 ELSE 0 END) AS prevOverdue,
+  CAST(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID = 2 AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' AND TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS todaySla,
-  CAST(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID = 2 AND TotalHoursOnTask <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
+  CAST(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID = 2 AND TotalHoursOnTask_BH <= SLAInHours THEN 1 ELSE 0 END) AS FLOAT)
     / NULLIF(SUM(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' AND TaskStatusID = 2 THEN 1 ELSE 0 END), 0) * 100 AS prevSla,
-  AVG(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' THEN TotalHoursOnTask ELSE NULL END) AS todayTat,
-  AVG(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' THEN TotalHoursOnTask ELSE NULL END) AS prevTat
+  AVG(CASE WHEN DateCreated >= '2026-05-28' AND DateCreated < '2026-05-29' THEN TotalHoursOnTask_BH ELSE NULL END) AS todayTat,
+  AVG(CASE WHEN DateCreated >= '2026-05-27' AND DateCreated < '2026-05-28' THEN TotalHoursOnTask_BH ELSE NULL END) AS prevTat
 FROM Tasks t WITH (NOLOCK)
 INNER JOIN ConfigFunction cf WITH (NOLOCK) ON t.FunctionID = cf.FunctionID
 WHERE TaskStatusID IN (1, 2, 4, 5, 6)
@@ -414,7 +414,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 ## 13. Assumptions
 
 1. **CONFIRMED:** Teams map to `QueueId` values in `ConfigQueue` — via `Tasks → ConfigFunction → QueueID` join (not direct). See Section 6 for full mapping.
-2. **CONFIRMED:** A task is "within SLA" when `TotalHoursOnTask <= SLAInHours` (both columns confirmed present in Tasks table).
+2. **CONFIRMED:** A task is "within SLA" when `TotalHoursOnTask_BH <= SLAInHours` (both columns confirmed present in Tasks table).
 3. **CONFIRMED:** Active tasks = `TaskStatusID IN (1,4,5,6)` (InProgress, OnHold, OnQueue, NotQueued). Completed = `TaskStatusID = 2`.
 4. **CONFIRMED:** Tasks links to ConfigQueue via `Tasks.FunctionID → ConfigFunction.FunctionID → ConfigFunction.QueueID`.
 5. **CONFIRMED:** Tasks table has `DateCreated` and `DateCompleted` columns (both used in delta queries).
@@ -432,7 +432,7 @@ GROUP BY CASE <TEAM_ID_CASE> END
 | 3 | DateCreated / DateCompleted columns? | RESOLVED — both confirmed present and used in delta queries. |
 | 4 | Active/open TaskStatusID values? | RESOLVED — active: `IN (1,4,5,6)`, completed: `= 2`. |
 | 5 | SLA target from ConfigSLA or hardcoded? | RESOLVED (partial) — hardcoded 4h for all teams. ConfigSLA values not yet checked. |
-| 6 | SLAInHours or SoEzySLA for compliance? | RESOLVED — using `TotalHoursOnTask <= SLAInHours` (confirmed working in live queries). |
+| 6 | SLAInHours or SoEzySLA for compliance? | RESOLVED — using `TotalHoursOnTask_BH <= SLAInHours` (confirmed working in live queries). |
 | 7 | SQL Server connection details? | RESOLVED — server `DESKTOP-HGGDDCR`, DB `MySEReport`, user `ntruong`, port 1433. |
 | 8 | Drill-through modal showing summary stats but no task rows? | RESOLVED (2026-06-17) — Bug was TEAM_ID_CASE SQL expression precedence. When tasks matched both a DepartmentId AND a ConfigLoanStatus, the dept filter was checked first, causing wrong QueueId assignment. Fixed by reordering CASE conditions: loan_status filters first (teams 5-6), then dept filters (teams 1-4,7-8). Verified end-to-end: `/api/tasks?team=6` now returns 7 Funder Submission tasks with QueueId=6, and modal renders all 7 rows correctly. |
 
@@ -702,13 +702,13 @@ Each Team Performance card shows a small label above the team name indicating th
 - Date filter: `DateCreated >= today AND DateCreated < next day` — same date scope as all other dashboard metrics (active tasks, deltas, etc.).
 - Team filter: same two-tier kpiGrp / dept-fallback logic as all other team queries.
 
-**Sorting:** Overdue completed tasks appear first (non-compliant: `TotalHoursOnTask > SLAInHours` OR `DateCompleted > SLAAdjustedDate`), then remaining completed tasks ordered by `TotalHoursOnTask` descending. Sorting applied in SQL `ORDER BY` in the backend.
+**Sorting:** Overdue completed tasks appear first (non-compliant: `TotalHoursOnTask_BH > SLAInHours` OR `DateCompleted > SLAAdjustedDate`), then remaining completed tasks ordered by `TotalHoursOnTask_BH` descending. Sorting applied in SQL `ORDER BY` in the backend.
 
 **Modal title:** `{Team Name} — Completed Tasks — Today` (via `taskLabel` prop on `TaskModal`).
 
-**Table structure:** Identical to existing drill-through tables — same 11 columns, same `TaskRow` component, same `normalizeTask()` normalization. Per-task TAT: `TotalHoursOnTask` (primary); fallback when null: `DATEDIFF(SLAAdjustedDate, DateCompleted) / 60.0` (hours from adjusted deadline to completion, requires both fields non-null).
+**Table structure:** Identical to existing drill-through tables — same 11 columns, same `TaskRow` component, same `normalizeTask()` normalization. Per-task TAT: `TotalHoursOnTask_BH` (primary); fallback when null: `DATEDIFF(SLAAdjustedDate, DateCompleted) / 60.0` (hours from adjusted deadline to completion, requires both fields non-null).
 
-**Status badges in completed-task rows (overdue logic — 2026-07-15 updated):** `bad` (red) = overdue: `TotalHoursOnTask > SLAInHours` (per-task, when non-null) OR `DateCompleted > SLAAdjustedDate` (when set). `ok` (green) = compliant. `warn` (amber) = TAT within target but at-risk threshold reached.
+**Status badges in completed-task rows (overdue logic — 2026-07-15 updated):** `bad` (red) = overdue: `TotalHoursOnTask_BH > SLAInHours` (per-task, when non-null) OR `DateCompleted > SLAAdjustedDate` (when set). `ok` (green) = compliant. `warn` (amber) = TAT within target but at-risk threshold reached.
 
 **Implementation:**
 - Backend: branch added in `/api/tasks` when `req.query.status === 'completed'`. Separate SQL query with `TaskStatusID = 2`, `DateCreated` scoping (same date basis as all other dashboard metrics), overdue-first `ORDER BY`.
@@ -720,11 +720,11 @@ Each Team Performance card shows a small label above the team name indicating th
 **Completed-tasks modal — metric cards (2026-07-15):** When `completedMode={true}` on `TaskModal`, the summary chips change:
 - **SLA %** — in `completedMode`, recalculated from task rows: `Math.round(tasks.filter(t => t.status !== 'bad').length / tasks.length * 100)`. Consistent with On-Time/Overdue counts using the same overdue logic. Falls back to `team.sla` when `tasks.length === 0`.
 - **Total Completed Tasks** — `tasks.length`: count of all completed tasks (`TaskStatusID = 2`) returned by the API for this team today. The backend `/api/tasks?status=completed` only returns `TaskStatusID = 2` rows, so this equals the full completed task count.
-- **Total On-Time Tasks** — `tasks.filter(t => t.status !== 'bad').length`: count of compliant completed tasks (`TaskStatusID = 2`) where status is not overdue — i.e., `TotalHoursOnTask ≤ SLAInHours` AND `DateCompleted ≤ SLAAdjustedDate` (when set). Includes both `'ok'` and `'warn'` tasks (at-risk but still completed within SLA counts as on-time).
+- **Total On-Time Tasks** — `tasks.filter(t => t.status !== 'bad').length`: count of compliant completed tasks (`TaskStatusID = 2`) where status is not overdue — i.e., `TotalHoursOnTask_BH ≤ SLAInHours` AND `DateCompleted ≤ SLAAdjustedDate` (when set). Includes both `'ok'` and `'warn'` tasks (at-risk but still completed within SLA counts as on-time).
 - **Overdue (Only Completed Tasks)** — `tasks.filter(t => t.status === 'bad').length` (same red styling as Overdue chip)
 - **Avg TAT (ONLY COMPLETED TASKS)** — recomputed from task rows using completed-task-specific TAT rules:
-  - **Primary:** `TotalHoursOnTask` when **positive** (`> 0` — non-null, non-zero, non-negative). Negative `tatHours` means `normalizeTask` used the `(CompletedDate − SLAAdjustedDate)` display fallback (task completed before adjusted deadline); those values are excluded from the avg and fall through to the elapsed-time fallback below.
-  - **Fallback:** `(CompletedDateTime − DateCreatedDateTime)` in hours — applied when `TotalHoursOnTask IS NULL`, 0, or negative. Requires both `completedDte` and `createDte` to be present (guaranteed by `DateCreated = today` API filter).
+  - **Primary:** `TotalHoursOnTask_BH` when **positive** (`> 0` — non-null, non-zero, non-negative). Negative `tatHours` means `normalizeTask` used the `(CompletedDate − SLAAdjustedDate)` display fallback (task completed before adjusted deadline); those values are excluded from the avg and fall through to the elapsed-time fallback below.
+  - **Fallback:** `(CompletedDateTime − DateCreatedDateTime)` in hours — applied when `TotalHoursOnTask_BH IS NULL`, 0, or negative. Requires both `completedDte` and `createDte` to be present (guaranteed by `DateCreated = today` API filter).
   - **Excluded:** tasks where neither primary nor fallback yields a valid TAT
   - Implemented in `completedAvgTat` useMemo using `parseDMY` for the fallback date diff
   - Falls back to `team.avgTat` when all tasks have no computable TAT. Uses `TOOLTIPS.modal.avgTatCompleted`.
@@ -842,12 +842,12 @@ The regular active-tasks modal retains its original chips (SLA % | Volume | Avg 
 
 **On hold / On task columns (2026-07-16 — all tables):**
 - Column **On hold (hours)** — header wraps; source field: `t.TotalHoursOnHold` (real, nullable). Displayed as **exactly 1 decimal** using `.toFixed(1)` (e.g. `0.0`, `2.5`), shows `-` when null.
-- Column **On task (hours)** — header wraps; source field: `t.TotalHoursOnTask` (real, nullable). Displayed as **exactly 1 decimal** using `.toFixed(1)` (e.g. `0.0`, `4.0`), shows `-` when null.
+- Column **On task (hours)** — header wraps; source field: `t.TotalHoursOnTask_BH` (real, nullable). Displayed as **exactly 1 decimal** using `.toFixed(1)` (e.g. `0.0`, `4.0`), shows `-` when null.
 - Both columns appear **after Description** in all task tables: TaskModal, AlertsPanel drill-through, TasksView.
 - Header `<th>` has `whiteSpace:'normal'` to allow wrapping (overrides global `white-space: nowrap` on `.task-table thead th`).
 - `TotalHoursOnHold` is now selected in `/api/tasks` and both UNION branches of `/api/alert-tasks/:teamId` in `server.js`.
 - Mapped through `normalizeTask()` in `App.jsx` as `onHoldHours` and `onTaskHours` (rounded to 1dp, null-safe).
-- AlertsPanel rows use raw `t.TotalHoursOnHold` / `t.TotalHoursOnTask` directly (alert-tasks API path, not normalized).
+- AlertsPanel rows use raw `t.TotalHoursOnHold` / `t.TotalHoursOnTask_BH` directly (alert-tasks API path, not normalized).
 - No horizontal scrolling: TAT vs Target reduced from 180px → 160px; SLAAdjusted Dte 120px → 110px; Priority 80px → 70px; Team (TasksView) 130px → 120px.
 
 ### Chart Rendering Rules (2026-06-15)
@@ -1625,7 +1625,7 @@ Dashboard data updates automatically when the underlying database changes. Users
   WHERE  TaskStatusID IN (1,2,4,5,6)
     AND  DateCreated >= '<today>' AND DateCreated < '<tomorrow>'
   ```
-- If `n` or `chk` changes (new tasks, status changes, TotalHoursOnTask updates), backend:
+- If `n` or `chk` changes (new tasks, status changes, TotalHoursOnTask_BH updates), backend:
   1. Invalidates `_cache.kpi.ts` and `_cache.teams.ts`
   2. Broadcasts `event: data-changed` to all connected clients
   3. Logs `[sse] data changed → notified N client(s)`

@@ -1,4 +1,4 @@
-const express   = require('express');
+﻿const express   = require('express');
 const cors      = require('cors');
 const helmet    = require('helmet');
 const rateLimit = require('express-rate-limit');
@@ -48,8 +48,11 @@ function systemTodayLocal() {
   return `${y}-${m}-${day}`;
 }
 
-// Alias: all internal callers use todayLocal(); both always return system clock.
-const todayLocal = systemTodayLocal;
+// Alias: all internal callers use todayLocal().
+// FORCE_TODAY in .env overrides the date (testing only). Remove it to restore live behaviour.
+const todayLocal = () => (process.env.FORCE_TODAY && /^\d{4}-\d{2}-\d{2}$/.test(process.env.FORCE_TODAY))
+  ? process.env.FORCE_TODAY
+  : systemTodayLocal();
 function prevBizDay(dateStr) {
   const d   = new Date(dateStr + 'T00:00:00');
   const dow = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
@@ -371,7 +374,7 @@ async function checkForChanges() {
     const pool = await connectDB();
     const { today, todayNext } = computeDates();
     // Lightweight fingerprint: row count + weighted checksum over active tasks today.
-    // Detects new tasks, status changes, and TotalHoursOnTask / SLAAdjustedDate updates.
+    // Detects new tasks, status changes, and TotalHoursOnTask_BH / SLAAdjustedDate updates.
     const r = await pool.request().query(`
       SELECT COUNT(*) AS n,
              ISNULL(SUM(CAST(TaskStatusID AS BIGINT) * 3 + TaskID % 997), 0) AS chk
@@ -418,25 +421,25 @@ async function fetchKpiData(customTargets = {}, visibleTeamIds = null) {
         -- overdue = active tasks where (TAT > SLAInHours OR TAT > teamTarget) OR GETDATE() > SLAAdjustedDate; TAT conditions require non-null non-zero TAT
         SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
                  AND t.TaskStatusID IN (1, 4, 5, 6)
-                 AND ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
+                 AND ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
                  THEN 1 ELSE 0 END)                                              AS totalOverdue,
-        -- avgTat = mean TotalHoursOnTask for active tasks created today (NULL/zero excluded)
+        -- avgTat = mean TotalHoursOnTask_BH for active tasks created today (NULL/zero excluded)
         AVG(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
                  AND t.TaskStatusID IN (1,4,5,6)
-                 AND t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0
-                 THEN t.TotalHoursOnTask ELSE NULL END)                           AS avgTat,
+                 AND t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0
+                 THEN t.TotalHoursOnTask_BH ELSE NULL END)                           AS avgTat,
         -- prev biz day equivalents for deltas
         SUM(CASE WHEN t.DateCreated >= '${prev}' AND t.DateCreated < '${prevNext}'
                  AND t.TaskStatusID IN (1, 4, 5, 6)
                  THEN 1 ELSE 0 END)                                              AS prevTasks,
         SUM(CASE WHEN t.DateCreated >= '${prev}' AND t.DateCreated < '${prevNext}'
                  AND t.TaskStatusID IN (1, 4, 5, 6)
-                 AND ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
+                 AND ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
                  THEN 1 ELSE 0 END)                                              AS prevOverdue,
         AVG(CASE WHEN t.DateCreated >= '${prev}' AND t.DateCreated < '${prevNext}'
                  AND t.TaskStatusID IN (1,4,5,6)
-                 AND t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0
-                 THEN t.TotalHoursOnTask ELSE NULL END)                           AS prevTat
+                 AND t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0
+                 THEN t.TotalHoursOnTask_BH ELSE NULL END)                           AS prevTat
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
       ${CONFIG_TASKS_JOIN}
@@ -508,20 +511,20 @@ async function fetchTeamsData(customTargets = {}) {
   // Four parallel queries:
   // Q1: volume, avgTat, overdue � active/all tasks, DateCreated today.
   // Q2: volume/overdue/TAT deltas � DateCreated today + prev.
-  // Q3: SLA% per team (DateCreated scope, TotalHoursOnTask/SLAInHours compliance) � completed tasks (status=2), DateCompleted today + prev.
+  // Q3: SLA% per team (DateCreated scope, TotalHoursOnTask_BH/SLAInHours compliance) � completed tasks (status=2), DateCompleted today + prev.
   const [result, delta, slaResult, tcResult] = await Promise.all([
     pool.request().query(`
       SELECT
         CASE ${getTeamIdCase()} END AS teamId,
         -- volume: active tasks only
         SUM(CASE WHEN t.TaskStatusID IN (1, 4, 5, 6) THEN 1 ELSE 0 END)           AS volume,
-        -- avgTat: TotalHoursOnTask for active tasks only (NULL/zero excluded)
+        -- avgTat: TotalHoursOnTask_BH for active tasks only (NULL/zero excluded)
         AVG(CASE WHEN t.TaskStatusID IN (1,4,5,6)
-                 AND t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0
-                 THEN t.TotalHoursOnTask ELSE NULL END)                            AS avgTat,
+                 AND t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0
+                 THEN t.TotalHoursOnTask_BH ELSE NULL END)                            AS avgTat,
         -- overdue: active tasks where (TAT > SLAInHours OR TAT > teamTarget) OR GETDATE() > SLAAdjustedDate; TAT conditions require non-null non-zero TAT
         SUM(CASE WHEN t.TaskStatusID IN (1, 4, 5, 6)
-                 AND ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
+                 AND ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
                  THEN 1 ELSE 0 END) AS overdue
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
@@ -536,10 +539,10 @@ async function fetchTeamsData(customTargets = {}) {
         CASE ${getTeamIdCase()} END AS teamId,
         SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS todayVol,
         SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) THEN 1 ELSE 0 END) AS prevVol,
-        SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) AND ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS todayOverdue,
-        SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) AND ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS prevOverdue,
-        AVG(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) AND t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 THEN t.TotalHoursOnTask ELSE NULL END) AS todayTat,
-        AVG(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) AND t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 THEN t.TotalHoursOnTask ELSE NULL END) AS prevTat
+        SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) AND ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS todayOverdue,
+        SUM(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) AND ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS prevOverdue,
+        AVG(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}' AND t.TaskStatusID IN (1,4,5,6) AND t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 THEN t.TotalHoursOnTask_BH ELSE NULL END) AS todayTat,
+        AVG(CASE WHEN t.DateCreated >= '${prev}'  AND t.DateCreated < '${prevNext}'  AND t.TaskStatusID IN (1,4,5,6) AND t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 THEN t.TotalHoursOnTask_BH ELSE NULL END) AS prevTat
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
       ${CONFIG_TASKS_JOIN}
@@ -553,14 +556,14 @@ async function fetchTeamsData(customTargets = {}) {
         CASE ${getTeamIdCase()} END AS teamId,
         CAST(
           SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
-                   AND (t.TotalHoursOnTask IS NULL OR t.TotalHoursOnTask <= t.SLAInHours)
+                   AND (t.TotalHoursOnTask_BH IS NULL OR t.TotalHoursOnTask_BH <= t.SLAInHours)
                    AND (t.SLAAdjustedDate IS NULL OR t.DateCompleted <= t.SLAAdjustedDate)
                    THEN 1 ELSE 0 END) AS FLOAT)
           / NULLIF(SUM(CASE WHEN t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
                             THEN 1 ELSE 0 END), 0) * 100                         AS todaySla,
         CAST(
           SUM(CASE WHEN t.DateCreated >= '${prev}' AND t.DateCreated < '${prevNext}'
-                   AND (t.TotalHoursOnTask IS NULL OR t.TotalHoursOnTask <= t.SLAInHours)
+                   AND (t.TotalHoursOnTask_BH IS NULL OR t.TotalHoursOnTask_BH <= t.SLAInHours)
                    AND (t.SLAAdjustedDate IS NULL OR t.DateCompleted <= t.SLAAdjustedDate)
                    THEN 1 ELSE 0 END) AS FLOAT)
           / NULLIF(SUM(CASE WHEN t.DateCreated >= '${prev}' AND t.DateCreated < '${prevNext}'
@@ -755,10 +758,10 @@ app.get('/api/kpi-summary', async (req, res) => {
   if (USE_MOCK) {
     const active = mock.TASKS.filter(t => t.TaskStatusID === 1);
     const total     = active.length;
-    const compliant = active.filter(t => t.TotalHoursOnTask <= t.SLAInHours).length;
-    const overdue   = active.filter(t => t.TotalHoursOnTask >  t.SLAInHours).length;
+    const compliant = active.filter(t => t.TotalHoursOnTask_BH <= t.SLAInHours).length;
+    const overdue   = active.filter(t => t.TotalHoursOnTask_BH >  t.SLAInHours).length;
     const avgTat    = total > 0
-      ? Math.round((active.reduce((s, t) => s + t.TotalHoursOnTask, 0) / total) * 10) / 10
+      ? Math.round((active.reduce((s, t) => s + t.TotalHoursOnTask_BH, 0) / total) * 10) / 10
       : 0;
     return res.json({
       totalTasks:  total,
@@ -793,10 +796,10 @@ app.get('/api/teams', async (req, res) => {
     const teams  = mock.CONFIG_QUEUE.map(q => {
       const qTasks    = active.filter(t => t.QueueId === q.QueueId);
       const volume    = qTasks.length;
-      const compliant = qTasks.filter(t => t.TotalHoursOnTask <= t.SLAInHours).length;
-      const overdue   = qTasks.filter(t => t.TotalHoursOnTask >  t.SLAInHours).length;
+      const compliant = qTasks.filter(t => t.TotalHoursOnTask_BH <= t.SLAInHours).length;
+      const overdue   = qTasks.filter(t => t.TotalHoursOnTask_BH >  t.SLAInHours).length;
       const avgTat    = volume > 0
-        ? Math.round((qTasks.reduce((s, t) => s + t.TotalHoursOnTask, 0) / volume) * 10) / 10
+        ? Math.round((qTasks.reduce((s, t) => s + t.TotalHoursOnTask_BH, 0) / volume) * 10) / 10
         : 0;
       const cfg = mock.TEAM_CONFIG[q.QueueId];
       return {
@@ -834,7 +837,7 @@ app.get('/api/tasks', async (req, res) => {
     if (status === 'ok')  tasks = tasks.filter(t => t.status === 'ok');
     if (status === 'warn') tasks = tasks.filter(t => t.status === 'warn');
     if (status === 'bad') tasks = tasks.filter(t => t.status === 'bad');
-    tasks = tasks.sort((a, b) => b.TotalHoursOnTask - a.TotalHoursOnTask);
+    tasks = tasks.sort((a, b) => b.TotalHoursOnTask_BH - a.TotalHoursOnTask_BH);
     return res.json(tasks);
   }
   try {
@@ -859,7 +862,6 @@ app.get('/api/tasks', async (req, res) => {
           t.TaskName,
           t.ShortDescription,
           t.CreatedBy,
-          t.TotalHoursOnTask,
           t.TotalHoursOnTask_BH,
           t.TotalHoursOnHold,
           t.SLAInHours,
@@ -879,7 +881,7 @@ app.get('/api/tasks', async (req, res) => {
           ISNULL(cb.IsGroup, 0) AS CreatedByIsGroup,
           DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 AS RealtimeTAT,
           CASE
-            WHEN (t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask > t.SLAInHours)
+            WHEN (t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH > t.SLAInHours)
               OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted > t.SLAAdjustedDate)
               THEN 'bad'
             ELSE 'ok'
@@ -905,10 +907,10 @@ app.get('/api/tasks', async (req, res) => {
       }
       cQuery += `
         ORDER BY
-          CASE WHEN (t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask > t.SLAInHours)
+          CASE WHEN (t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH > t.SLAInHours)
                     OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted > t.SLAAdjustedDate)
                THEN 0 ELSE 1 END,
-          t.TotalHoursOnTask DESC
+          t.TotalHoursOnTask_BH DESC
       `;
       const cResult = await request.query(cQuery);
       return res.json(cResult.recordset);
@@ -928,7 +930,6 @@ app.get('/api/tasks', async (req, res) => {
         t.TaskName,
         t.ShortDescription,
         t.CreatedBy,
-        t.TotalHoursOnTask,
         t.TotalHoursOnTask_BH,
         t.TotalHoursOnHold,
         t.SLAInHours,
@@ -946,11 +947,11 @@ app.get('/api/tasks', async (req, res) => {
         ISNULL(s.IsGroup, 0) AS AssignedToIsGroup,
         RTRIM(ISNULL(cb.FirstName,'') + ISNULL(' ' + cb.Surname, '')) AS CreatedByFullName,
         ISNULL(cb.IsGroup, 0) AS CreatedByIsGroup,
-        -- RealtimeTAT: TotalHoursOnTask for active tasks (NULL = excluded from TAT calculation)
-        t.TotalHoursOnTask AS RealtimeTAT,
+        -- RealtimeTAT: TotalHoursOnTask_BH for active tasks (NULL = excluded from TAT calculation)
+        t.TotalHoursOnTask_BH AS RealtimeTAT,
         CASE
-          WHEN ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 'bad'
-          WHEN t.TotalHoursOnTask > 0 AND t.TotalHoursOnTask >= ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction} THEN 'warn'
+          WHEN ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 'bad'
+          WHEN t.TotalHoursOnTask_BH > 0 AND t.TotalHoursOnTask_BH >= ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction} THEN 'warn'
           ELSE 'ok'
         END AS status
       FROM Tasks t WITH (NOLOCK)
@@ -974,16 +975,16 @@ app.get('/api/tasks', async (req, res) => {
       }
     }
     if (status === 'ok') {
-      query += ` AND (t.TotalHoursOnTask IS NULL OR t.TotalHoursOnTask = 0 OR t.TotalHoursOnTask < ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction})`;
+      query += ` AND (t.TotalHoursOnTask_BH IS NULL OR t.TotalHoursOnTask_BH = 0 OR t.TotalHoursOnTask_BH < ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction})`;
     } else if (status === 'warn') {
-      query += ` AND t.TotalHoursOnTask > 0 AND t.TotalHoursOnTask >= ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction} AND t.TotalHoursOnTask <= ISNULL(NULLIF(t.SLAInHours, 0), 4)`;
+      query += ` AND t.TotalHoursOnTask_BH > 0 AND t.TotalHoursOnTask_BH >= ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction} AND t.TotalHoursOnTask_BH <= ISNULL(NULLIF(t.SLAInHours, 0), 4)`;
     } else if (status === 'bad') {
-      query += ` AND ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))`;
+      query += ` AND ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))`;
     }
     if (scope === 'today') {
       query += ` AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'`;
     }
-    query += ` ORDER BY ISNULL(t.TotalHoursOnTask, -1) DESC`;
+    query += ` ORDER BY ISNULL(t.TotalHoursOnTask_BH, -1) DESC`;
 
     const result = await request.query(query);
     res.json(result.recordset);
@@ -1023,7 +1024,7 @@ async function fetchHistoryData(range = '90d', customTargets = {}) {
         CASE ${getTeamIdCase()} END                                               AS teamId,
         COUNT(*)                                                               AS total,
         SUM(CASE WHEN
-              (t.TotalHoursOnTask IS NULL OR t.TotalHoursOnTask <= t.SLAInHours)
+              (t.TotalHoursOnTask_BH IS NULL OR t.TotalHoursOnTask_BH <= t.SLAInHours)
               AND (t.SLAAdjustedDate IS NULL OR t.DateCompleted <= t.SLAAdjustedDate)
             THEN 1 ELSE 0 END)                                                AS compliant
       FROM Tasks t WITH (NOLOCK)
@@ -1134,8 +1135,8 @@ app.get('/api/alerts', async (req, res) => {
         QueueId:   q.QueueId,
         QueueName: q.QueueName,
         total:     qTasks.length,
-        compliant: qTasks.filter(t => t.TotalHoursOnTask <= t.SLAInHours).length,
-        overdue:   qTasks.filter(t => t.TotalHoursOnTask >  t.SLAInHours).length,
+        compliant: qTasks.filter(t => t.TotalHoursOnTask_BH <= t.SLAInHours).length,
+        overdue:   qTasks.filter(t => t.TotalHoursOnTask_BH >  t.SLAInHours).length,
       };
     });
     return res.json(buildAlerts(rows));
@@ -1152,9 +1153,9 @@ app.get('/api/alerts', async (req, res) => {
         COUNT(*)                                                                AS total,
         -- inProgress: tasks with TaskStatusID = 1 ("In Progress" status only)
         SUM(CASE WHEN t.TaskStatusID = 1 THEN 1 ELSE 0 END)                    AS inProgress,
-        -- compliant = total - overdue: tasks not currently breaching SLA (includes TotalHoursOnTask=0/NULL)
-        SUM(CASE WHEN NOT ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${alertTargetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS compliant,
-        SUM(CASE WHEN (t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${alertTargetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate) THEN 1 ELSE 0 END) AS overdue
+        -- compliant = total - overdue: tasks not currently breaching SLA (includes TotalHoursOnTask_BH=0/NULL)
+        SUM(CASE WHEN NOT ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${alertTargetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 1 ELSE 0 END) AS compliant,
+        SUM(CASE WHEN (t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${alertTargetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate) THEN 1 ELSE 0 END) AS overdue
       FROM Tasks t WITH (NOLOCK)
       LEFT  JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
       ${CONFIG_TASKS_JOIN}
@@ -1196,22 +1197,22 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
   if (USE_MOCK) {
     const tasks = mock.TASKS
       .filter(t => [1, 4, 5, 6].includes(t.TaskStatusID)
-               && t.TotalHoursOnTask >= t.SLAInHours * atRiskFraction)
-      .sort((a, b) => b.TotalHoursOnTask - a.TotalHoursOnTask)
+               && t.TotalHoursOnTask_BH >= t.SLAInHours * atRiskFraction)
+      .sort((a, b) => b.TotalHoursOnTask_BH - a.TotalHoursOnTask_BH)
       .slice(0, 50)
       .map(t => ({
         TaskID:           t.TaskID,
         CreateDte:        t.DateCreated || null,
         SLAAdjustedDte:   t.SLAAdjustedDate || null,
         ShortDescription: t.ShortDescription || t.desc || null,
-        TotalHoursOnTask: t.TotalHoursOnTask,
+        TotalHoursOnTask_BH: t.TotalHoursOnTask_BH,
         SLAInHours:       t.SLAInHours,
-        TatHours:         t.TotalHoursOnTask,
+        TatHours:         t.TotalHoursOnTask_BH,
         TargetHours:      t.SLAInHours,
         Priority:         (t.Priority || 'low').toString().toLowerCase(),
         OverDueComments:  t.OverDueComments || null,
-        overdueHours:     Math.max(0, Math.round((t.TotalHoursOnTask - t.SLAInHours) * 10) / 10),
-        taskType:         t.TotalHoursOnTask > t.SLAInHours ? 'overdue' : 'atrisk',
+        overdueHours:     Math.max(0, Math.round((t.TotalHoursOnTask_BH - t.SLAInHours) * 10) / 10),
+        taskType:         t.TotalHoursOnTask_BH > t.SLAInHours ? 'overdue' : 'atrisk',
       }));
     return res.json(tasks);
   }
@@ -1239,16 +1240,16 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
           CONVERT(VARCHAR(10), t.DateCreated, 103) + ' ' + CONVERT(VARCHAR(8), t.DateCreated, 108) AS CreateDte,
           CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) + ' ' + CONVERT(VARCHAR(8), t.SLAAdjustedDate, 108) AS SLAAdjustedDte,
           t.ShortDescription,
-          t.TotalHoursOnTask,
+          t.TotalHoursOnTask_BH,
           t.TotalHoursOnHold,
           t.SLAInHours,
-          ROUND(ISNULL(t.TotalHoursOnTask, 0), 1) AS TatHours,
+          ROUND(ISNULL(t.TotalHoursOnTask_BH, 0), 1) AS TatHours,
           ${slaExpr} AS TargetHours,
           LOWER(ISNULL(CONVERT(VARCHAR(20), t.Priority), 'low')) AS Priority,
           t.OverDueComments,
           CASE
-            WHEN t.TotalHoursOnTask > 0 AND t.TotalHoursOnTask > t.SLAInHours
-              THEN ROUND(t.TotalHoursOnTask - t.SLAInHours, 1)
+            WHEN t.TotalHoursOnTask_BH > 0 AND t.TotalHoursOnTask_BH > t.SLAInHours
+              THEN ROUND(t.TotalHoursOnTask_BH - t.SLAInHours, 1)
             ELSE 0
           END AS overdueHours,
           'overdue' AS taskType,
@@ -1260,8 +1261,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
           AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
           AND ${teamFilter}
           AND ${slaExpr} > 0
-          AND ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${slaExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
-        ORDER BY ISNULL(t.TotalHoursOnTask, 0) / ${slaExpr} DESC
+          AND ((t.TotalHoursOnTask_BH IS NOT NULL AND t.TotalHoursOnTask_BH <> 0 AND (t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${slaExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
+        ORDER BY ISNULL(t.TotalHoursOnTask_BH, 0) / ${slaExpr} DESC
       ) AS Overdue
       UNION ALL
       SELECT * FROM (
@@ -1271,10 +1272,10 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
           CONVERT(VARCHAR(10), t.DateCreated, 103) + ' ' + CONVERT(VARCHAR(8), t.DateCreated, 108) AS CreateDte,
           CONVERT(VARCHAR(10), t.SLAAdjustedDate, 103) + ' ' + CONVERT(VARCHAR(8), t.SLAAdjustedDate, 108) AS SLAAdjustedDte,
           t.ShortDescription,
-          t.TotalHoursOnTask,
+          t.TotalHoursOnTask_BH,
           t.TotalHoursOnHold,
           t.SLAInHours,
-          ROUND(ISNULL(t.TotalHoursOnTask, 0), 1) AS TatHours,
+          ROUND(ISNULL(t.TotalHoursOnTask_BH, 0), 1) AS TatHours,
           ${slaExpr} AS TargetHours,
           LOWER(ISNULL(CONVERT(VARCHAR(20), t.Priority), 'low')) AS Priority,
           t.OverDueComments,
@@ -1288,11 +1289,11 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
           AND t.DateCreated >= '${today}' AND t.DateCreated < '${todayNext}'
           AND ${teamFilter}
           AND ${slaExpr} > 0
-          AND t.TotalHoursOnTask > 0
-          AND t.TotalHoursOnTask >= ${slaExpr} * ${atRiskFraction}
-          AND t.TotalHoursOnTask <= ${slaExpr}
-          AND NOT ((t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${slaExpr}) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
-        ORDER BY ISNULL(t.TotalHoursOnTask, 0) / ${slaExpr} DESC
+          AND t.TotalHoursOnTask_BH > 0
+          AND t.TotalHoursOnTask_BH >= ${slaExpr} * ${atRiskFraction}
+          AND t.TotalHoursOnTask_BH <= ${slaExpr}
+          AND NOT ((t.TotalHoursOnTask_BH > t.SLAInHours OR t.TotalHoursOnTask_BH > ${slaExpr}) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate))
+        ORDER BY ISNULL(t.TotalHoursOnTask_BH, 0) / ${slaExpr} DESC
       ) AS AtRisk
     `);
     // Return overdue rows first, then at-risk rows
