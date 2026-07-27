@@ -21,17 +21,46 @@
   perspective: 1400px;
 
   background:
-    radial-gradient(ellipse 100% 80% at 50% 50%,
-      #ffffff 0%, #fafafa 55%, #f1f1f1 100%);
+    radial-gradient(ellipse 110% 90% at 50% 50%,
+      #ffffff 0%, #fdf7f7 45%, #f5eded 100%);
 
   animation: mezy-page-in 0.6s ease-out both;
+  /* initial centre-position for video portal mask */
+  --mouse-x: 50%;
+  --mouse-y: 50%;
 }
 
-/* ── Ambient depth orbs (background drift) ──────────────────────────────── */
+/* Slowly flowing colour-wash overlay — creates the ambient gradient-shift "fluid" feeling */
+.mezy-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    135deg,
+    rgba(160, 10, 28, 0.07)  0%,
+    rgba(120,  5, 18, 0.05) 50%,
+    rgba(180, 15, 35, 0.06) 100%
+  );
+  background-size: 400% 400%;
+  animation: mezy-gradient-flow 14s ease-in-out infinite;
+}
+
+/* ── Ambient depth orbs (background drift) ─────────────────────────────────────── */
+/* JS sets translate on the wrapper; inner .mezy-orb keeps its own CSS drift animation */
+.mezy-orb-wrap {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  will-change: transform;
+}
+
 .mezy-orb {
   position: absolute;
   border-radius: 50%;
-  filter: blur(80px);
+  /* No blur filter — radial-gradient already gives soft edges; blur() causes expensive GPU repaints */
   pointer-events: none;
   opacity: 0;
   z-index: 0;
@@ -42,35 +71,48 @@
   width: 620px; height: 620px;
   top: -180px; left: -160px;
   background: radial-gradient(circle,
-    rgba(252, 200, 200, 0.55) 0%,
-    rgba(252, 200, 200, 0)   70%);
+    rgba(160,  8, 24, 0.36) 0%,
+    rgba(160,  8, 24, 0)   68%);
   animation:
-    mezy-orb-in       1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.05s forwards,
-    mezy-orb-drift-a  22s  ease-in-out                    1.6s infinite;
+    mezy-orb-in      1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.05s forwards,
+    mezy-orb-drift-a 14s  ease-in-out                    1.6s infinite;
 }
 
 .mezy-orb--cool {
   width: 720px; height: 720px;
   bottom: -220px; right: -200px;
   background: radial-gradient(circle,
-    rgba(200, 215, 240, 0.45) 0%,
-    rgba(200, 215, 240, 0)   70%);
+    rgba(130,  5, 20, 0.30) 0%,
+    rgba(130,  5, 20, 0)   68%);
   animation:
-    mezy-orb-in       1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.15s forwards,
-    mezy-orb-drift-b  26s  ease-in-out                    1.6s infinite;
+    mezy-orb-in      1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.15s forwards,
+    mezy-orb-drift-b 18s  ease-in-out                    1.6s infinite;
 }
 
 .mezy-orb--accent {
   width: 380px; height: 380px;
   top: 28%; right: 16%;
   background: radial-gradient(circle,
-    rgba(200, 16, 46, 0.10) 0%,
-    rgba(200, 16, 46, 0)   70%);
+    rgba(185, 12, 32, 0.40) 0%,
+    rgba(185, 12, 32, 0)   68%);
   animation:
-    mezy-orb-in       1.8s cubic-bezier(0.22, 1, 0.36, 1) 0.30s forwards,
-    mezy-orb-drift-c  18s  ease-in-out                    1.8s infinite;
+    mezy-orb-in      1.8s cubic-bezier(0.22, 1, 0.36, 1) 0.30s forwards,
+    mezy-orb-drift-c 11s  ease-in-out                    1.8s infinite;
 }
-
+/* Large central ambient orb — slow breathe adds mid-scene depth without parallax */
+.mezy-orb--mid {
+  width: 880px; height: 560px;
+  top: calc(50% - 280px);
+  left: calc(50% - 440px);
+  background: radial-gradient(ellipse,
+    rgba(155,  8, 22, 0.16)  0%,
+    rgba(140,  6, 20, 0.08) 40%,
+    rgba(155,  8, 22, 0)    70%);
+  /* No blur filter — ellipse radial-gradient provides soft falloff natively */
+  animation:
+    mezy-orb-in    2.0s cubic-bezier(0.22, 1, 0.36, 1) 0.10s forwards,
+    mezy-orb-pulse 20s  ease-in-out                    2.0s  infinite;
+}
 /* ── Logo ───────────────────────────────────────────────────────────────── */
 .mezy-logo {
   position: relative;
@@ -79,7 +121,7 @@
   text-align: center;
   animation:
     mezy-logo-in     0.95s cubic-bezier(0.22, 1, 0.36, 1) 0.2s both,
-    mezy-logo-float  6s    ease-in-out                    1.4s infinite;
+    mezy-logo-float  4s    ease-in-out                    1.4s infinite;
   will-change: transform, opacity;
 }
 
@@ -105,7 +147,7 @@
 
   animation:
     mezy-card-in     1.1s cubic-bezier(0.22, 1, 0.36, 1) 0.4s both,
-    mezy-card-float  9s   ease-in-out                    1.7s infinite;
+    mezy-card-float  6s   ease-in-out                    1.7s infinite;
 
   /* Cursor-aware 3D tilt — values set by JS */
   transform-style: preserve-3d;
@@ -130,16 +172,48 @@
     0 36px 90px rgba(0, 0, 0, 0.16),
     0 0 0 1px   rgba(0, 0, 0, 0.03);
 }
+/* Mouse-following spotlight glow inside the card
+   (bento-card::after pattern from fluid-motion reference) */
+.mezy-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  background: radial-gradient(
+    500px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(200, 16, 46, 0.08),
+    transparent 55%
+  );
+  opacity: 0;
+  transition: opacity 0.6s ease;
+  pointer-events: none;
+  z-index: 1;
+}
 
-/* ── Inner content (staggered reveal) ───────────────────────────────────── */
+.mezy-card:hover::after {
+  opacity: 1;
+}
+/* kinetic-title pattern from FluidMotion reference — dark-to-crimson shimmer */
 .mezy-heading {
   margin: 0 0 4px;
   font-size: 22px;
   font-weight: 500;
-  color: #0f0f0f;
   letter-spacing: -0.01em;
   font-family: 'Inter', Arial, sans-serif;
-  animation: mezy-fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.78s both;
+  background: linear-gradient(
+    to right,
+    #0f0f0f 10%,
+    #8B0014 42%,
+    #8B0014 58%,
+    #0f0f0f 90%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation:
+    mezy-fade-up      0.7s cubic-bezier(0.22, 1, 0.36, 1) 0.78s both,
+    mezy-text-shimmer 6s  linear                          1.5s  infinite;
 }
 
 .mezy-subtext {
@@ -281,17 +355,19 @@
     border-color     0.3s ease;
 }
 
-/* Soft shimmer that sweeps on hover */
+/* Mouse-following liquid-metal glow
+   (btn-mercury::before pattern from fluid-motion reference) */
 .mezy-btn::before {
   content: '';
   position: absolute;
   inset: 0;
-  background: linear-gradient(120deg,
-    transparent 30%,
-    rgba(255, 255, 255, 0.25) 50%,
-    transparent 70%);
-  transform: translateX(-110%);
-  transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+  background: radial-gradient(
+    circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    rgba(200, 16, 46, 0.35),
+    transparent 70%
+  );
+  opacity: 0;
+  transition: opacity 0.4s ease;
   pointer-events: none;
 }
 
@@ -306,7 +382,7 @@
 }
 
 .mezy-btn:hover::before {
-  transform: translateX(110%);
+  opacity: 1;
 }
 
 .mezy-btn:active {
@@ -331,24 +407,48 @@
 }
 
 @keyframes mezy-orb-drift-a {
-  0%, 100% { transform: translate(0,      0)    scale(1);    }
-  50%      { transform: translate(60px,   40px) scale(1.08); }
+  0%   { transform: translate(0,     0);    }
+  33%  { transform: translate(40px,  22px); }
+  66%  { transform: translate(14px,  38px); }
+  100% { transform: translate(0,     0);    }
 }
 
 @keyframes mezy-orb-drift-b {
-  0%, 100% { transform: translate(0,      0)     scale(1);    }
-  50%      { transform: translate(-50px, -30px)  scale(1.06); }
+  0%   { transform: translate(0,      0);    }
+  33%  { transform: translate(-32px, -24px); }
+  66%  { transform: translate(-12px, -40px); }
+  100% { transform: translate(0,      0);    }
 }
 
 @keyframes mezy-orb-drift-c {
-  0%, 100% { transform: translate(0,    0)    scale(1);    }
-  50%      { transform: translate(40px, -60px) scale(1.10); }
+  0%   { transform: translate(0,     0);    }
+  33%  { transform: translate(28px, -36px); }
+  66%  { transform: translate(-20px,-22px); }
+  100% { transform: translate(0,     0);    }
+}
+
+/* Text shimmer — kinetic-title pattern from FluidMotion reference */
+@keyframes mezy-text-shimmer {
+  to { background-position: 200% center; }
+}
+
+/* Flowing background gradient wash */
+@keyframes mezy-gradient-flow {
+  0%   { background-position:   0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position:   0% 50%; }
+}
+
+/* Central orb slow breathe — opacity only, no scale (avoids blur-repaint on large element) */
+@keyframes mezy-orb-pulse {
+  0%, 100% { opacity: 1;    }
+  50%      { opacity: 0.55; }
 }
 
 /* Logo entrance + continuous gentle float */
 @keyframes mezy-logo-in {
-  from { opacity: 0; transform: translateY(-22px) scale(0.9); filter: blur(4px); }
-  to   { opacity: 1; transform: translateY(0)     scale(1);   filter: blur(0);   }
+  from { opacity: 0; transform: translateY(-18px) scale(0.92); }
+  to   { opacity: 1; transform: translateY(0)     scale(1);    }
 }
 
 @keyframes mezy-logo-float {
@@ -358,14 +458,13 @@
 
 /* Card entrance with refined settle + continuous breathing */
 @keyframes mezy-card-in {
-  0%   { opacity: 0; transform: translateY(40px) scale(0.95); filter: blur(6px); }
-  60%  { opacity: 1; filter: blur(0); }
-  100% { opacity: 1; transform: translateY(0)    scale(1);    filter: blur(0); }
+  0%   { opacity: 0; transform: translateY(32px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0)    scale(1);    }
 }
 
 @keyframes mezy-card-float {
   0%, 100% { transform: translateY(0); }
-  50%      { transform: translateY(-3px); }
+  50%      { transform: translateY(-5px); }
 }
 
 /* Generic staggered content reveal */
@@ -380,15 +479,52 @@
   to   { opacity: 1; transform: translateY(0);     }
 }
 
+/* ── Video portal (cursor-revealed fluid wave — reference: video.mp4) ──── */
+.mezy-video-portal {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  overflow: hidden;
+  transform: scale(1.06);  /* slight overscan — hides edges at extreme cursor positions */
+  will-change: transform;  /* promote to compositor layer for smooth mask repaints */
+  opacity: 0;
+  mask-image: radial-gradient(
+    circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    black 28%,
+    transparent 72%
+  );
+  -webkit-mask-image: radial-gradient(
+    circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
+    black 28%,
+    transparent 72%
+  );
+  /* No extra filter — video plays at natural quality; saturate/contrast added GPU cost */
+  animation: mezy-portal-in 1.6s cubic-bezier(0.22, 1, 0.36, 1) 0.4s forwards;
+}
+
+.mezy-video-portal video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+@keyframes mezy-portal-in {
+  from { opacity: 0; }
+  to   { opacity: 0.5; }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    ACCESSIBILITY — respect prefers-reduced-motion
    ═══════════════════════════════════════════════════════════════════════════ */
 
 @media (prefers-reduced-motion: reduce) {
   .mezy-page,
+  .mezy-page::before,
   .mezy-logo,
   .mezy-card,
   .mezy-orb,
+  .mezy-orb-wrap,
   .mezy-heading,
   .mezy-subtext,
   .mezy-alert,
@@ -402,7 +538,8 @@
   }
 
   .mezy-card.is-ready,
-  .mezy-page:hover .mezy-card {
+  .mezy-page:hover .mezy-card,
+  .mezy-orb-wrap {
     transform: none !important;
   }
 
@@ -412,5 +549,13 @@
   .mezy-link::after,
   .mezy-btn::before {
     transition: none !important;
+  }
+
+  /* Hide spotlight pseudo-elements and waves entirely */
+  .mezy-card::after,
+  .mezy-btn::before,
+  .mezy-video-portal {
+    opacity: 0 !important;
+    animation: none !important;
   }
 }

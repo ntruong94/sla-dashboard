@@ -70,27 +70,42 @@ function buildTargetQS(targets = {}) {
 }
 
 export const getHealth    = ()               => request('/api/health');
-export const getKpiSummary = (targets = {}, visibleTeamIds = null) => {
-  const qs = buildTargetQS(targets);
-  const vtParam = visibleTeamIds && visibleTeamIds.length > 0
-    ? (qs ? '&' : '?') + 'visibleTeams=' + visibleTeamIds.join(',')
-    : '';
-  return request(`/api/kpi-summary${qs}${vtParam}`);
-};
+export const getKpiSummary = (targets = {}) => request(`/api/kpi-summary${buildTargetQS(targets)}`);
 export const getTeams     = (targets = {})  => request(`/api/teams${buildTargetQS(targets)}`);
 export const getHistory   = (range = '90d', targets = {}) => {
   const tqs = buildTargetQS(targets);
   return request(`/api/history?range=${range}${tqs ? '&' + tqs.slice(1) : ''}`);
 };
 export const getAlerts    = (targets = {})  => request(`/api/alerts${buildTargetQS(targets)}`);
-export const getAlertTasks = (teamId, atRiskPct = 87.5, customTarget = null, limit = 50) => {
-  let url = `/api/alert-tasks/${teamId}?atRiskPct=${atRiskPct}&limit=${limit}`;
+export const getAlertTasks = (teamId, atRiskPct = 87.5, customTarget = null) => {
+  let url = `/api/alert-tasks/${teamId}?atRiskPct=${atRiskPct}`;
   if (customTarget > 0) url += `&customTarget=${customTarget}`;
   return request(url);
 };
 
 export const getLoanSummary = ()              => request('/api/loan-summary');
 export const getLoanDetail  = (type)          => request(`/api/loan-detail/${type}`);
+export const getLoanTrend   = (type)          => request(`/api/loan-trend/${type}`);
+
+export const getUserSettings  = ()        => request('/api/user/settings');
+export const putUserSettings  = (data)    => request('/api/user/settings', {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(data),
+});
+
+export const getGlobalSettings  = ()      => request('/api/settings');
+export const saveGlobalSettings = (data)  => request('/api/admin/settings', {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(data),
+});
+
+export function connectDataStream() {
+  const token = getToken();
+  const url = `${BASE}/api/events?token=${encodeURIComponent(token)}`;
+  return new EventSource(url);
+}
 
 // ── Admin-only helpers ────────────────────────────────────────────────────────
 async function postAction(path) {
@@ -116,41 +131,13 @@ export const getStaffDepartments  = ()       => request('/api/staff/departments'
 export const getStaffAbsentToday  = ()       => request('/api/staff/absent-today');
 export const getStaffByDepartment = (deptId) => request(`/api/staff/department/${deptId}`);
 
-export const getTaskCodes = () => request('/api/task-codes');
+export const getTaskCodes = () => request('/api/admin/task-codes');
 
-// ── SSE data-change stream ───────────────────────────────────────────────────
-// Creates an EventSource that receives "data-changed" invalidation events.
-// Caller is responsible for cleanup (call .close() on the returned object).
-// JWT is passed as a query param because EventSource does not support custom headers.
-export function connectDataStream() {
-  return new EventSource(`${BASE}/api/events?token=${encodeURIComponent(getToken())}`);
-}
-
-export const getTasks = (teamId, status, scope, targets = {}) => {
+export const getTasks = (teamId, status, scope) => {
   const params = new URLSearchParams();
   if (teamId != null) params.set('team', teamId);
   if (status)         params.set('status', status);
   if (scope)          params.set('scope', scope);
-  Object.entries(targets).forEach(([id, h]) => { if (h > 0) params.set(`t${id}`, h); });
   const qs = params.toString();
   return request('/api/tasks' + (qs ? '?' + qs : ''));
 };
-
-// ── Global admin settings ────────────────────────────────────────────────────
-// GET /api/settings — all users read global settings on login and refresh
-export const getGlobalSettings  = ()     => request('/api/settings');
-// PUT /api/admin/settings — admin saves global settings; persisted in DB
-export const saveGlobalSettings = (data) => request('/api/admin/settings', {
-  method: 'PUT',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(data),
-});
-
-// ── Per-user settings (backed by ConfigReportUsers.UserSettings in SQL Server) ─
-// Source of truth: the database. localStorage is used as a fast cache on startup.
-export const getUserSettings = () => request('/api/user/settings');
-export const putUserSettings = (settings) => request('/api/user/settings', {
-  method: 'PUT',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(settings),
-});

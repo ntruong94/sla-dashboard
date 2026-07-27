@@ -179,7 +179,7 @@ function generateTasks() {
         SoEzySLA:            config.slaTarget,
         SoEzySLA_BH:         config.slaTarget,
         TotalHoursOnTask:    hours,
-        TotalHoursOnTask_BH: Math.round(hours * 0.75 * 10) / 10,
+        TotalHoursOnTask: Math.round(hours * 0.75 * 10) / 10,
         SLARemaining:        Math.max(0, Math.round((config.slaTarget - hours) * 10) / 10),
         CreatedDate:         createdDate.toISOString(),
         // ── Joined columns (from ConfigQueue, Staff, ConfigTaskStatus) ─────

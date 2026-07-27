@@ -1,7 +1,7 @@
 ﻿import React from 'react';
 import ReactDOM from 'react-dom';
 import { Icon } from './icons.jsx';
-import { slaClass, slaLabel, TOOLTIPS } from '../constants.js';
+import { slaClass, TOOLTIPS } from '../constants.js';
 import { getAlertTasks } from '../api.js';
 import { fmtHMS, useSortState, sortRows, parseDMY, SortTh } from './utils.js';
 
@@ -15,26 +15,43 @@ export const InfoTip = ({ text, width }) => {
   const iconRef = React.useRef(null);
   const [pos, setPos] = React.useState(null); // {top, left, below} in px when visible
   // Stable unique id per instance — used to close other open InfoTips on open
-  const idRef = React.useRef(null);
-  if (!idRef.current) idRef.current = Math.random().toString(36).slice(2);
+  const stableId = React.useId().replace(/:/g, '');
 
   const toggle = (e) => {
     e.stopPropagation();
     setPos(prev => {
       if (prev) return null; // already open → close
-      // closed → open: compute position and signal others to close
-      const r = iconRef.current.getBoundingClientRect();
-      const below = r.top < 200;
-      document.dispatchEvent(new CustomEvent('infotip-opened', { detail: { id: idRef.current } }));
-      return { top: below ? r.bottom : r.top, left: r.left + r.width / 2, below };
+      // closed → open: compute viewport-safe position and signal others to close
+      const r        = iconRef.current.getBoundingClientRect();
+      const bubbleW  = width || 240;
+      const MARGIN   = 8;
+      const GAP      = 7;
+      const vw       = window.innerWidth;
+      const vh       = window.innerHeight;
+      // Horizontal: centre bubble on icon, then clamp inside viewport
+      const rawLeft   = r.left + r.width / 2 - bubbleW / 2;
+      const left      = Math.max(MARGIN, Math.min(rawLeft, vw - MARGIN - bubbleW));
+      // Arrow caret tracks the icon centre, clamped within bubble bounds
+      const arrowLeft = Math.max(8, Math.min((r.left + r.width / 2) - left, bubbleW - 8));
+      // Vertical: prefer above; fall back to below when space above < 80px or below has more room
+      const below     = r.top < 80 || (vh - r.bottom) > r.top;
+      document.dispatchEvent(new CustomEvent('infotip-opened', { detail: { id: stableId } }));
+      return {
+        ...(below ? { top: r.bottom + GAP } : { bottom: vh - r.top + GAP }),
+        left,
+        arrowLeft,
+        below,
+      };
     });
   };
 
   // One-at-a-time: close when another InfoTip opens
   React.useEffect(() => {
-    const handler = (e) => { if (e.detail.id !== idRef.current) setPos(null); };
+    const handler = (e) => { if (e.detail.id !== stableId) setPos(null); };
     document.addEventListener('infotip-opened', handler);
     return () => document.removeEventListener('infotip-opened', handler);
+  // stableId comes from useId() and is stable — adding it here satisfies exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Close on outside click/tap (pointerdown covers mouse + touch)
@@ -74,9 +91,14 @@ export const InfoTip = ({ text, width }) => {
       {pos && ReactDOM.createPortal(
         <span
           className={`info-tip-bubble info-tip-bubble--fixed${pos.below ? ' info-tip-bubble--below' : ''}`}
-          style={{ top: pos.top, left: pos.left, ...(width ? { width } : {}) }}
+          style={{
+            ...(pos.below ? { top: pos.top } : { bottom: pos.bottom }),
+            left: pos.left,
+            '--arrow-left': `${pos.arrowLeft}px`,
+            ...(width ? { width } : {}),
+          }}
         >
-          {text}
+          <span className="info-tip-bubble__content">{text}</span>
         </span>,
         document.body
       )}
@@ -85,9 +107,12 @@ export const InfoTip = ({ text, width }) => {
 };
 
 // --- KPI tile ---
-const KpiTile = ({ label, value, unit, delta, deltaDir, accent, icon, tooltip, tooltipWidth }) => {
-  const deltaClass = deltaDir === 'up' ? (accent === 'bad' ? 'up-bad' : 'up') :
-                     deltaDir === 'down' ? (accent === 'bad' ? 'down up' : 'down') : 'up';
+const KpiTile = ({ label, value, unit, delta, deltaDir, accent, icon, tooltip, tooltipWidth, deltaInvert }) => {
+  // deltaInvert=true: metric where up=bad/down=good (Avg TAT).
+  // accent='bad':     same inversion + pink tile background (Overdue).
+  const invert = deltaInvert || accent === 'bad';
+  const deltaClass = deltaDir === 'up'   ? (invert ? 'up-bad' : 'up') :
+                     deltaDir === 'down' ? (invert ? 'up'     : 'down') : 'neutral';
   return (
     <div className={`kpi ${accent ? 'accent-' + accent : ''}`}>
       <div className="kpi-top">
@@ -110,7 +135,6 @@ const KpiTile = ({ label, value, unit, delta, deltaDir, accent, icon, tooltip, t
 // --- Team Card ---
 const TeamCard = ({ team, onClick, onSlaClick }) => {
   const cls = slaClass(team.sla);
-  const over = team.avgTat > team.target;
   const hasOverdue = team.overdue > 0;
   const d = team.deltas || { volume: 0, sla: 0, avgTat: 0, overdue: 0 };
 
@@ -227,6 +251,7 @@ const alertStatusInfoVal = (taskType) => {
 };
 
 // Sortable drill-through table for alert tasks (handles its own sort state)
+// eslint-disable-next-line no-unused-vars
 const AlertDrillTable = ({ rows }) => {
   const [sort, cycleSort] = useSortState();
   const sorted = sortRows(rows, sort.col, sort.dir, (t, col) => {
@@ -678,8 +703,6 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10, taskLabel, loadin
     return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   }, [completedMode, tasks]);
 
-  const cls = slaClass(team.sla);
-
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true" style={completedMode ? {background:'#D3D3D3'} : undefined}>
@@ -687,7 +710,7 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10, taskLabel, loadin
           <div className="modal-head-top">
             <div className="modal-title">
               <div className="sub">{team.fallbackDeptId ? 'Department Group' : 'KPI Group'} · SLA target {team.target}h</div>
-              <h2>{team.name} — {taskLabel ?? `Top ${maxTasks} Active Tasks`}</h2>
+              <h2>{team.name} — {taskLabel ?? (loading ? 'Loading…' : `Top ${tasks.length} Active Tasks`)}</h2>
             </div>
             <button className="modal-close" onClick={onClose} aria-label="Close">
               <Icon name="close" size={18}/>

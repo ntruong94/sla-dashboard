@@ -158,7 +158,6 @@ export const HistoryChart = ({ teams, slice, dimmed, compactDots = false }) => {
           <div className="tooltip show" style={{ position: 'fixed', left: fixedLeft, top: fixedTop, zIndex: 9998 }}>
             <div className="tooltip-head">{fmtTooltip(dates[hoverIdx])}</div>
             {visibleTeams.filter(t => !dimmed.has(t.id))
-              .sort((a, b) => (slice.byTeam[b.id][hoverIdx] ?? 0) - (slice.byTeam[a.id][hoverIdx] ?? 0))
               .map(t => {
                 const v = slice.byTeam[t.id][hoverIdx];
                 if (v == null) return null;

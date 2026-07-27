@@ -11,13 +11,16 @@ export default function Mezylogin({ onLogin }) {
   const [resetToken, setResetToken] = useState('');
   const [newPassword, setNewPass]   = useState('');
   const [confirmPass, setConfirm]   = useState('');
-  const [error, setError]           = useState('Sorry, You Must Log In First !');
+  const [error, setError]           = useState('Please enter your credentials');
   const [info, setInfo]             = useState('');
   const [busy, setBusy]             = useState(false);
   const [ready, setReady]           = useState(false);
 
-  const pageRef = useRef(null);
-  const cardRef = useRef(null);
+  const pageRef      = useRef(null);
+  const cardRef      = useRef(null);
+  const orbWarmRef   = useRef(null);
+  const orbCoolRef   = useRef(null);
+  const orbAccentRef = useRef(null);
 
   // Enable cursor-aware tilt after card entrance settles
   useEffect(() => {
@@ -25,7 +28,7 @@ export default function Mezylogin({ onLogin }) {
     return () => clearTimeout(t);
   }, []);
 
-  // Cursor-aware 3D tilt — Housekeeper-style signature interaction
+  // Cursor-aware 3D tilt + layered orb parallax — fluid depth on every pointer move
   useEffect(() => {
     if (!ready) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -34,9 +37,19 @@ export default function Mezylogin({ onLogin }) {
     const card = cardRef.current;
     if (!page || !card) return;
 
+    // Pre-cache spotlight targets so onMove doesn't query DOM every frame
+    const btns = page.querySelectorAll('.mezy-btn');
+
     let rafId = null;
+    // Card tilt
     let targetRX = 0, targetRY = 0, targetY = 0;
-    let curRX = 0,    curRY = 0,    curY = 0;
+    let curRX    = 0, curRY    = 0, curY   = 0;
+    // Orb parallax — each layer has its own speed & direction for depth illusion
+    let tWX = 0, tWY = 0, cWX = 0, cWY = 0;   // warm (deep, slow)
+    let tCX = 0, tCY = 0, cCX = 0, cCY = 0;   // cool (opposite direction)
+    let tAX = 0, tAY = 0, cAX = 0, cAY = 0;   // accent (fastest, closest)
+    // Video-portal mask — stored as viewport %, lerped in tick() for 60fps smooth
+    let tMX = 50, tMY = 50, cMX = 50, cMY = 50;
 
     const onMove = (e) => {
       const rect = page.getBoundingClientRect();
@@ -47,20 +60,59 @@ export default function Mezylogin({ onLogin }) {
 
       targetRY =  dx * 4;   // max ±4deg
       targetRX = -dy * 4;
-      targetY  = -Math.abs(dy) * 2; // gentle lift toward cursor
+      targetY  = -Math.abs(dy) * 2;
+      // Store portal mask target — written to CSS in tick() for 60fps sync
+      tMX = (e.clientX - rect.left) / rect.width  * 100;
+      tMY = (e.clientY - rect.top)  / rect.height * 100;
+      // Warm orb follows cursor (same direction — deep layer feel)
+      tWX =  dx * 24;  tWY =  dy * 16;
+      // Cool orb drifts opposite (crossing layers create sense of volume)
+      tCX = -dx * 18;  tCY = -dy * 12;
+      // Accent reacts fastest (closest to viewer)
+      tAX =  dx * 12;  tAY = -dy * 8;
+      // Per-element --mouse-x / --mouse-y for CSS spotlight effects
+      // (bento-card::after + btn-mercury::before pattern from reference)
+      const cr = card.getBoundingClientRect();
+      card.style.setProperty('--mouse-x', `${((e.clientX - cr.left) / cr.width  * 100).toFixed(1)}%`);
+      card.style.setProperty('--mouse-y', `${((e.clientY - cr.top)  / cr.height * 100).toFixed(1)}%`);
+      btns.forEach(b => {
+        const br = b.getBoundingClientRect();
+        b.style.setProperty('--mouse-x', `${((e.clientX - br.left) / br.width  * 100).toFixed(1)}%`);
+        b.style.setProperty('--mouse-y', `${((e.clientY - br.top)  / br.height * 100).toFixed(1)}%`);
+      });
     };
 
     const onLeave = () => {
       targetRX = 0; targetRY = 0; targetY = 0;
+      tWX = 0; tWY = 0;
+      tCX = 0; tCY = 0;
+      tAX = 0; tAY = 0;
+      tMX = 50; tMY = 50;   // drift mask back to centre
     };
 
     const tick = () => {
+      // Card tilt
       curRX += (targetRX - curRX) * 0.08;
       curRY += (targetRY - curRY) * 0.08;
       curY  += (targetY  - curY)  * 0.08;
-      card.style.setProperty('--mezy-rx',       `${curRX.toFixed(2)}deg`);
-      card.style.setProperty('--mezy-ry',       `${curRY.toFixed(2)}deg`);
-      card.style.setProperty('--mezy-float-y',  `${curY.toFixed(2)}px`);
+      card.style.setProperty('--mezy-rx',      `${curRX.toFixed(2)}deg`);
+      card.style.setProperty('--mezy-ry',      `${curRY.toFixed(2)}deg`);
+      card.style.setProperty('--mezy-float-y', `${curY.toFixed(2)}px`);
+      // Orb parallax (slower lerp = dreamlike lag behind the cursor)
+      cWX += (tWX - cWX) * 0.035;  cWY += (tWY - cWY) * 0.035;
+      cCX += (tCX - cCX) * 0.030;  cCY += (tCY - cCY) * 0.030;
+      cAX += (tAX - cAX) * 0.050;  cAY += (tAY - cAY) * 0.050;
+      const ow = orbWarmRef.current;
+      const oc = orbCoolRef.current;
+      const oa = orbAccentRef.current;
+      if (ow) ow.style.transform = `translate(${cWX.toFixed(1)}px,${cWY.toFixed(1)}px)`;
+      if (oc) oc.style.transform = `translate(${cCX.toFixed(1)}px,${cCY.toFixed(1)}px)`;
+      if (oa) oa.style.transform = `translate(${cAX.toFixed(1)}px,${cAY.toFixed(1)}px)`;
+      // Video-portal radial mask — lerped at display rate (60fps) for smooth motion
+      cMX += (tMX - cMX) * 0.10;
+      cMY += (tMY - cMY) * 0.10;
+      page.style.setProperty('--mouse-x', `${cMX.toFixed(2)}%`);
+      page.style.setProperty('--mouse-y', `${cMY.toFixed(2)}%`);
       rafId = requestAnimationFrame(tick);
     };
 
@@ -174,10 +226,27 @@ export default function Mezylogin({ onLogin }) {
   return (
     <div className="mezy-page" ref={pageRef}>
 
-      {/* Ambient depth orbs — drift slowly behind everything */}
-      <div className="mezy-orb mezy-orb--warm"   aria-hidden="true" />
-      <div className="mezy-orb mezy-orb--cool"   aria-hidden="true" />
-      <div className="mezy-orb mezy-orb--accent" aria-hidden="true" />
+      {/* Ambient depth orbs — parallax wrapper gets cursor-driven translate;
+          inner .mezy-orb retains its autonomous CSS drift animation */}
+      <div className="mezy-orb-wrap" ref={orbWarmRef} aria-hidden="true">
+        <div className="mezy-orb mezy-orb--warm" />
+      </div>
+      <div className="mezy-orb-wrap" ref={orbCoolRef} aria-hidden="true">
+        <div className="mezy-orb mezy-orb--cool" />
+      </div>
+      <div className="mezy-orb-wrap" ref={orbAccentRef} aria-hidden="true">
+        <div className="mezy-orb mezy-orb--accent" />
+      </div>
+      {/* Central ambient pulse — no parallax, adds mid-scene depth */}
+      <div className="mezy-orb mezy-orb--mid" aria-hidden="true" />
+
+      {/* Video portal — fluid wave video revealed by cursor radial mask (reference: video.mp4) */}
+      <div className="mezy-video-portal" aria-hidden="true">
+        <video autoPlay muted loop playsInline
+          onLoadedMetadata={(e) => { e.target.playbackRate = 0.50; }}>
+          <source src="/video.mp4" type="video/mp4" />
+        </video>
+      </div>
 
       {/* Logo — first to appear */}
       <div className="mezy-logo">

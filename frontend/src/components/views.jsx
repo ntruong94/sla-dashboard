@@ -1,4 +1,5 @@
 import React from 'react';
+import ReactDOM from 'react-dom';
 import { Icon } from './icons.jsx';
 import { HistoryChart } from './history-chart.jsx';
 import { AlertsPanel, InfoTip } from './components.jsx';
@@ -508,7 +509,7 @@ const Sparkline = ({ data, color }) => {
 };
 
 // ===== ALERTS VIEW — full feed =====
-const AlertsView = ({ alerts, onDismiss, maxTasks = 10 }) => {
+const AlertsView = ({ alerts, onDismiss, maxTasks = 10, customTargets = {}, atRiskPct = 87.5 }) => {
   const critical = alerts.filter(a => a.severity === 'critical');
   const warning = alerts.filter(a => a.severity === 'warning');
 
@@ -529,7 +530,8 @@ const AlertsView = ({ alerts, onDismiss, maxTasks = 10 }) => {
           <div style={{color:'var(--ink-muted)',fontSize:10}}>No active alerts. All teams operating within thresholds.</div>
         </div>
       ) : (
-        <AlertsPanel alerts={alerts} onDismiss={onDismiss} drillMode="table" maxTasks={maxTasks}/>
+        <AlertsPanel alerts={alerts} onDismiss={onDismiss} drillMode="table" maxTasks={maxTasks}
+          customTargets={customTargets} atRiskPct={atRiskPct}/>
       )}
     </main>
   );
@@ -1082,8 +1084,8 @@ function StaffListView() {
         </>
       )}
 
-      {/* Drill-through modal */}
-      {drillDept && (
+      {/* Drill-through modal — portalled to document.body to escape .main isolation:isolate stacking context */}
+      {drillDept && ReactDOM.createPortal(
         <div className="modal-overlay" onClick={closeDrill}>
           <div className="modal" onClick={e => e.stopPropagation()} role="dialog" aria-modal="true">
             <div className="modal-head">
@@ -1153,7 +1155,7 @@ function StaffListView() {
             )}
           </div>
         </div>
-      )}
+      , document.body)}
     </main>
   );
 }

@@ -188,7 +188,7 @@ export const TrendChart = ({ teams, trendData, dimmed, onLegendClick, dayLabels 
             <div className="tooltip-head">{dayLabels[hoverIdx]}</div>
             {teams
               .filter(t => !dimmed.has(t.id))
-              .sort((a, b) => (trendData[b.id]?.[hoverIdx] ?? 0) - (trendData[a.id]?.[hoverIdx] ?? 0))
+              .filter(t => !dimmed.has(t.id))
               .map(t => {
                 const v = trendData[t.id]?.[hoverIdx];
                 if (v == null) return null;

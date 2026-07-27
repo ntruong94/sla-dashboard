@@ -919,40 +919,49 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .info-tip[aria-expanded="true"] .info-tip-icon { opacity: 1; }
 
 /* Portal bubble — rendered into document.body, position:fixed so it escapes
-   any parent overflow:hidden / stacking context. */
+   any parent overflow:hidden / stacking context.
+   Position (left + top/bottom) is computed directly in JS with viewport clamping —
+   no CSS transform. Arrow left-offset via --arrow-left custom property so it
+   keeps pointing at the icon even when the bubble is horizontally shifted. */
 .info-tip-bubble--fixed {
   position: fixed;
-  transform: translate(-50%, calc(-100% - 10px));
   background: var(--ink);
   color: #fff;
   font-size: 12px;
   font-weight: 400;
-  line-height: 1.55;
-  padding: 9px 12px;
   border-radius: 7px;
   box-shadow: 0 4px 18px rgba(0,0,0,0.28);
   pointer-events: none;
-  white-space: pre-line;
-  overflow-wrap: break-word;
-  width: 240px;
   z-index: 9999;
   text-transform: none;
   letter-spacing: 0;
   font-family: Inter, system-ui, -apple-system, sans-serif;
 }
+/* Scrollable content area inside the bubble */
+.info-tip-bubble__content {
+  display: block;
+  padding: 10px 13px;
+  white-space: pre-line;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  line-height: 1.6;
+  overflow-y: auto;
+  max-height: 65vh;
+  box-sizing: border-box;
+  border-radius: 7px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.25) transparent;
+}
 .info-tip-bubble--fixed::after {
   content: '';
   position: absolute;
   top: 100%;
-  left: 50%;
+  left: var(--arrow-left, 50%);
   transform: translateX(-50%);
   border: 5px solid transparent;
   border-top-color: var(--ink);
 }
 /* Flipped variant — bubble appears below the icon when near the top of the viewport */
-.info-tip-bubble--below {
-  transform: translate(-50%, 10px);
-}
 .info-tip-bubble--below::after {
   top: auto;
   bottom: 100%;

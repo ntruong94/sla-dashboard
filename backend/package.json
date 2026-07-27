@@ -6,7 +6,9 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node server.js",
-    "check-dates": "node check-hardcoded-dates.js"
+    "check-dates": "node check-hardcoded-dates.js",
+    "check-must": "node check-must-rules.js",
+    "check-all": "node check-hardcoded-dates.js && node check-must-rules.js"
   },
   "keywords": [],
   "author": "",

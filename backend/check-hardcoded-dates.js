@@ -10,15 +10,25 @@
  * Add to CI pipeline as a blocking step before deployment.
  * The rule: all "today/current" logic must come from systemTodayLocal() or
  * GETDATE() — never a literal date string in production code.
+ * See CLAUDE.md Section 7 for the Global Date/Time Rule.
  */
 
 'use strict';
 const fs   = require('fs');
 const path = require('path');
 
-// Production files to scan (relative to this script's directory).
+const ROOT = path.resolve(__dirname, '..');
+
+// Production files to scan (backend + frontend).
 const TARGETS = [
+  // Backend
   path.join(__dirname, 'server.js'),
+  // Frontend
+  path.join(ROOT, 'frontend/src/App.jsx'),
+  path.join(ROOT, 'frontend/src/api.js'),
+  path.join(ROOT, 'frontend/src/components/components.jsx'),
+  path.join(ROOT, 'frontend/src/components/views.jsx'),
+  path.join(ROOT, 'frontend/src/constants.js'),
 ];
 
 // Matches SQL/JS date literals like '2026-05-28' or "2026-05-28".
@@ -49,8 +59,9 @@ for (const file of TARGETS) {
 if (violations > 0) {
   console.error(
     `\n\u274C  ${violations} hardcoded date literal(s) found in production code.\n` +
-    '    Use systemTodayLocal() for date-range params and GETDATE() for SQL comparisons.\n' +
-    '    See CLAUDE.md Section 28 for the global date/time rule.'
+    '    Backend: use systemTodayLocal() for date-range params, GETDATE() for SQL comparisons.\n' +
+    '    Frontend: do not embed literal YYYY-MM-DD strings in source; fetch from backend or use runtime Date.\n' +
+    '    See CLAUDE.md Section 7 for the Global Date/Time Rule.'
   );
   process.exit(1);
 } else {
