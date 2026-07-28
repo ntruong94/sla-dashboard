@@ -56,58 +56,58 @@ export const slaLabel = (pct) => pct >= 90 ? 'On Target' : pct >= 75 ? 'At Risk'
 export const TOOLTIPS = {
   kpi: {
     totalTasks:
-      'All currently active tasks across every team.\n\nIncludes: In Progress, On Hold, On Queue, Not Queued.\n\nExcluded: Completed and Cancelled.\n\nDate basis: No date filter � all currently active tasks.',
+      'All currently active tasks across every team.\n\nIncludes: In Progress, On Hold, On Queue, Not Queued.\n\nExcluded: Completed ',
 
     overallSla:
-      'SLA compliance rate for completed tasks today.\n\nFormula: On-time completions � total completions today � 100\n\nIncludes: Completed tasks (SLAAdjustedDate = today).\n\nExcluded: Active and Cancelled.\n\nDate basis: SLAAdjustedDate.\n\nTarget is configurable per team in Settings.',
+      'SLA compliance rate for completed tasks today.\n\nFormula: On-time completions ÷ total completions today × 100\n\nIncludes: Completed \n\nExcluded: Active \n\nDate basis: SLAAdjustedDate.\n\nTarget is configurable per team in Settings.',
 
     avgTat:
-      'Average time on task across all currently active tasks.\n\nRules:\n- Avg TAT = average TotalHoursOnTask.\n- Tasks with null or zero TotalHoursOnTask are excluded from the average.\n\nIncludes: Active tasks.\n\nExcluded: Tasks where TotalHoursOnTask is null or 0.\n\nDate basis: No date filter � all currently active tasks.\n\nTarget is configurable per team in Settings.',
+      'Average time on task across all currently active tasks.\n\nRules:\n- Avg TAT = average TotalHoursOnTask.\n\nIncludes: Active .\n\nExcluded: Tasks where TotalHoursOnTask is null or 0.\n\nTarget is configurable per team in Settings.',
 
     totalOverdue:
-      'Count of active tasks that have exceeded their SLA deadline.\n\nA task is overdue when any of these apply:\n- TotalHoursOnTask > task\'s own SLAInHours.\n- TotalHoursOnTask > team\'s SLA target in Settings.\n- Current time > task\'s SLAAdjustedDate.\n\nIncludes: Active tasks.\n\nExcluded: Cancelled; Completed; tasks where TotalHoursOnTask is null or 0.\n\nDate basis: No date filter � all currently active tasks.\n\nTarget is configurable per team in Settings.',
+      'Count of active tasks that have exceeded their SLA deadline.\n\nA task is overdue when any of these apply:\n- TotalHoursOnTask > SLAInHours.\n- TotalHoursOnTask > team\'s SLA target in Settings.\n- Current time > task\'s SLAAdjustedDate.\n\nIncludes: Active \n\nExcluded: Completed; tasks where TotalHoursOnTask is null or 0.\n\nTarget is configurable per team in Settings.',
   },
   team: {
     volume:
-      'Active tasks currently assigned to this team.\n\nIncludes: In Progress, On Hold, On Queue, Not Queued.\n\nExcluded: Completed and Cancelled.\n\nDate basis: No date filter � all currently active tasks.',
+      'Active tasks currently assigned to this team.\n\nIncludes: In Progress, On Hold, On Queue, Not Queued.\n\nExcluded: Completed',
 
     avgTat:
-      'Average time on task for this team\'s active tasks.\n\nRules:\n- Avg TAT = average TotalHoursOnTask.\n- Tasks with null or zero TotalHoursOnTask are excluded from the average.\n\nIncludes: Active tasks.\n\nExcluded: Tasks where TotalHoursOnTask is null or 0.\n\nDate basis: No date filter � all currently active tasks.\n\nTarget is configurable per team in Settings.',
+      'Average time on task for this team\'s active tasks.\n\nRules:\n- Avg TAT = average TotalHoursOnTask.\n\nIncludes: Active.\n\nExcluded: Tasks where TotalHoursOnTask is null or 0.\n\nTarget is configurable per team in Settings.',
 
     overdue:
-      'Active tasks in this team that have exceeded their SLA deadline.\n\nA task is overdue when any of these apply:\n- TotalHoursOnTask > task\'s own SLAInHours.\n- TotalHoursOnTask > team\'s SLA target in Settings.\n- Current time > task\'s SLAAdjustedDate.\n\nIncludes: Active tasks.\n\nExcluded: Cancelled; Completed; tasks where TotalHoursOnTask is null or 0.\n\nDate basis: No date filter � all currently active tasks.\n\nTarget is configurable per team in Settings.',
+      'Active tasks in this team that have exceeded their SLA deadline.\n\nA task is overdue when any of these apply:\n- TotalHoursOnTask > SLAInHours.\n- TotalHoursOnTask > team\'s SLA target in Settings.\n- Current time > task\'s SLAAdjustedDate.\n\nIncludes: Active .\n\nExcluded: Completed; tasks where TotalHoursOnTask is null or 0.\n\nTarget is configurable per team in Settings.',
 
     sla:
-      'SLA compliance rate for this team\'s completed tasks today.\n\nFormula: On-time completions � total completions today � 100\n\nRules:\n- Green = 90% (On Target)\n- Amber 75�89% (At Risk)\n- Red < 75% (Breach)\n\nIncludes: Completed tasks (SLAAdjustedDate = today).\n\nExcluded: Active and Cancelled.\n\nDate basis: SLAAdjustedDate.\n\nTarget is configurable per team in Settings.',
+      'SLA compliance rate for this team\'s completed tasks today.\n\nFormula: On-time completions ÷ total completions today × 100\n\nRules:\n- Green ≥ 90% (On Target)\n- Amber 75–89% (At Risk)\n- Red < 75% (Breach)\n\nIncludes: Completed\n\nExcluded: Active \n\nDate basis: SLAAdjustedDate.\n\nTarget is configurable per team in Settings.',
   },
   chart: {
     trend:
-      'Daily SLA compliance per team over the past 7 business days.\n\nRules:\n- Business days only (weekends excluded).\n- Each point = % of completed tasks that were SLA-compliant on that day.\n\nIncludes: Completed tasks.\n\nExcluded: Active and Cancelled.\n\nDate basis: SLAAdjustedDate.\n\nInteractions:\n- Click a team name in the legend to show or hide its line.\n- Hover over the chart to compare values on a specific day.\n\nTarget is configurable per team in Settings.',
+      'Daily SLA compliance per team over the past 7 business days.\n\nRules:\n- Business days only (weekends excluded).\n- Each point = % of completed tasks that were SLA-compliant on that day.\n\nIncludes: Completed.\n\nExcluded: Active.\n\nDate basis: SLAAdjustedDate.\n\nInteractions:\n- Click a team name in the legend to show or hide its line.\n- Hover over the chart to compare values on a specific day.\n\nTarget is configurable per team in Settings.',
 
     history:
-      'Historical SLA compliance per team over the selected date range.\n\nRules:\n- Business days only (weekends excluded).\n- Each point = % of completed tasks that were SLA-compliant on that day.\n\nIncludes: Completed tasks.\n\nExcluded: Active and Cancelled.\n\nDate basis: SLAAdjustedDate.\n\nInteractions:\n- Click a team name in the legend to show or hide its line.\n- Hover over the chart to compare values on a specific day.\n\nTarget is configurable per team in Settings.',
+      'Historical SLA compliance per team over the selected date range.\n\nRules:\n- Business days only (weekends excluded).\n- Each point = % of completed tasks that were SLA-compliant on that day.\n\nIncludes: Completed.\n\nExcluded: Active \n\nDate basis: SLAAdjustedDate.\n\nInteractions:\n- Click a team name in the legend to show or hide its line.\n- Hover over the chart to compare values on a specific day.\n\nTarget is configurable per team in Settings.',
   },
   teams: {
-    status: '? On Target � SLA = 90%\n? At Risk � SLA 75�89%\n? Breach � SLA < 75%',
+    status: '● On Target — SLA ≥ 90%\n● At Risk — SLA 75–89%\n● Breach — SLA < 75%',
   },
   modal: {
     sla:
-      'SLA compliance rate for this team\'s completed tasks today.\n\nFormula: On-time completions � total completions today � 100\n\nRules:\n- Green = 90% (On Target)\n- Amber 75�89% (At Risk)\n- Red < 75% (Breach)\n\nIncludes: Completed tasks (SLAAdjustedDate = today).\n\nExcluded: Active and Cancelled.\n\nDate basis: SLAAdjustedDate.\n\nTarget is configurable per team in Settings.',
+      'SLA compliance rate for this team\'s completed tasks today.\n\nFormula: On-time completions ÷ total completions today × 100\n\nRules:\n- Green ≥ 90% (On Target)\n- Amber 75–89% (At Risk)\n- Red < 75% (Breach)\n\nIncludes: Completed\n\nExcluded: Active\n\nDate basis: SLAAdjustedDate.\n\nTarget is configurable per team in Settings.',
 
     volume:
-      'Active tasks currently assigned to this team.\n\nIncludes: In Progress, On Hold, On Queue, Not Queued.\n\nExcluded: Completed and Cancelled.\n\nDate basis: No date filter � all currently active tasks.',
+      'Active tasks currently assigned to this team.\n\nIncludes: In Progress, On Hold, On Queue, Not Queued.\n\nExcluded: Completed',
 
     avgTat:
-      'Average time on task for this team\'s active tasks.\n\nRules:\n- Avg TAT = average TotalHoursOnTask.\n- Tasks with null or zero TotalHoursOnTask are excluded from the average.\n\nIncludes: Active tasks.\n\nExcluded: Tasks where TotalHoursOnTask is null or 0.\n\nDate basis: No date filter � all currently active tasks.\n\nTarget is configurable per team in Settings.',
+      'Average time on task for this team\'s active tasks.\n\nRules:\n- Avg TAT = average TotalHoursOnTask.\n\nIncludes: Active.\n\nExcluded: Tasks where TotalHoursOnTask is null or 0.',
 
     avgTatCompleted:
       'Average time on task for completed tasks.\n\nRules:\n- Uses TotalHoursOnTask when available (business hours).\n- Falls back to DateCompleted - DateCreated (in hours) when TotalHoursOnTask is null.\n\nIncludes: Completed tasks.\n\nExcluded: Tasks where both TotalHoursOnTask and SLAAdjustedDate are null.\n\nDate basis: SLAAdjustedDate.',
 
     overdue:
-      'Active tasks in this team that have exceeded their SLA deadline.\n\nA task is overdue when any of these apply:\n- TotalHoursOnTask > task\'s own SLAInHours.\n- TotalHoursOnTask > team\'s SLA target in Settings.\n- Current time > task\'s SLAAdjustedDate.\n\nIncludes: Active tasks.\n\nExcluded: Cancelled; Completed; tasks where TotalHoursOnTask is null or 0.\n\nDate basis: No date filter � all currently active tasks.\n\nTarget is configurable per team in Settings.',
+      'Active tasks in this team that have exceeded their SLA deadline.\n\nA task is overdue when any of these apply:\n- TotalHoursOnTask > SLAInHours.\n- TotalHoursOnTask > team\'s SLA target in Settings.\n- Current time > task\'s SLAAdjustedDate.\n\nIncludes:  Active.\n\nExcluded:  Completed; tasks where TotalHoursOnTask is null or 0.\n\nTarget is configurable per team in Settings.',
 
     overdueCompleted:
-      'Completed tasks in this team that exceeded their SLA deadline.\n\nA task is overdue when either of these apply:\n- TotalHoursOnTask > task\'s own SLAInHours.\n- DateCompleted > SLAAdjustedDate.\n\nIncludes: Completed tasks.\n\nExcluded: Cancelled; Active tasks; tasks where TotalHoursOnTask is null or 0.\n\nDate basis: SLAAdjustedDate.',
+      'Completed tasks in this team that exceeded their SLA deadline.\n\nA task is overdue when either of these apply:\n- TotalHoursOnTask >  SLAInHours.\n- DateCompleted > SLAAdjustedDate.\n\nIncludes: Completed \n\nExcluded:  Active tasks; tasks where TotalHoursOnTask is null or 0.\n\nDate basis: SLAAdjustedDate.',
   },
   alerts: {
     panel:
@@ -124,4 +124,5 @@ export const TOOLTIPS = {
       'Total loans settled on the latest reporting date.\n\nCounts applications where Date_Settled matches the reporting date.\n\nClick to view individual application details.',
   },
 };
+
 

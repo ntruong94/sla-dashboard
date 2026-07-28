@@ -34,7 +34,7 @@ When an admin saves **any** setting in the Settings tab (SLA targets, team order
 | Instant propagation on admin save | `PUT /api/admin/settings` calls `broadcastSettingsChanged()` which sends a `settings-changed` SSE event to all connected clients |
 | Viewer sessions update without polling delay | SSE listener in App.jsx catches `settings-changed`, calls `getGlobalSettings()`, applies `applyGlobalConfig()`, then calls `refreshData()` |
 | All components update together | `applyGlobalConfig` patches the single `settings` state; all useMemos (`teamsDisplay`, `effectiveKpi`, `tasksByTeam`, etc.) recompute atomically |
-| Scope | `targets` (SLA hours per team), `loanTargets`, `atRiskPct`, `hiddenTeams`, `groupOrder` — all stored in `GlobalSettings` |
+| Scope | `targets` (SLA hours per team), `loanTargets`, `atRiskPct`, `refreshMin`, `modalTaskCount`, `hiddenTeams`, `groupOrder` — all stored in `GlobalSettings` |
 | Fallback | 15-second poll on `GET /api/settings` version check also calls `refreshData()` — covers SSE-disconnected sessions |
 | Re-login consistency | All GlobalSettings fields are loaded and merged via `applyGlobalConfig` on every login and page refresh |
 
@@ -439,14 +439,14 @@ All data endpoints require a valid JWT (`Authorization: Bearer <token>`).
 ### Per-user
 Stored in `ConfigReportUsers.UserSettings NVARCHAR(MAX)` (DB source of truth) + `localStorage` key `sla_dash_settings_<email>` (fast-load cache).
 
-Includes: `refreshMin`, `modalTaskCount` only.
+Contains the full settings snapshot for fast-load on login. All dashboard-affecting values are overwritten by global config on every login and every `settings-changed` SSE event.
 
 > **All dashboard-affecting settings are global (admin-controlled)** — see below.
 
 ### Global team config (admin-only writes, all-users reads)
 Stored in `ConfigDashboards.GlobalSettings NVARCHAR(MAX)`.
 
-Includes: `hiddenTeams`, `groupOrder`, **`targets` (per-team SLA hours)**, **`loanTargets`**, **`atRiskPct`**, `version`.
+Includes: `hiddenTeams`, `groupOrder`, **`targets` (per-team SLA hours)**, **`loanTargets`**, **`atRiskPct`**, **`refreshMin`**, **`modalTaskCount`**, `version`.
 
 **Propagation:** Admin saves → `broadcastSettingsChanged()` fires immediately → all connected SSE sessions receive `settings-changed` event → reload GlobalSettings + apply `applyGlobalConfig()` + call `refreshData()`. No page reload, no poll delay.
 
@@ -543,6 +543,8 @@ Applies to `trend.jsx` and `history-chart.jsx`.
 ### Content source
 `frontend/src/constants.js` → `TOOLTIPS` object (sections: `kpi`, `team`, `chart`, `teams`, `modal`, `alerts`, `loan`).
 Settings-specific inline tooltips (Refresh interval, At Risk threshold, Tasks in drill-down) live in `views.jsx`.
+
+> **Source of truth for tooltip text:** `docs/SLA_Dashboard_Tooltips.xlsx` — Column D contains the authoritative tooltip text for all 24 keys. When updating tooltip content, edit Column D in the xlsx first, then run `node docs/patch-tooltips.js` from the project root to propagate changes to `constants.js`. Formatting is preserved exactly as written in Column D (same indentation, line breaks, spacing, punctuation, and capitalisation).
 
 ### Text formatting standards
 
@@ -687,7 +689,48 @@ If any change would violate a rule above: stop immediately, warn the user, propo
 
 ---
 
-## 22. Restart Procedure
+## 22. Pre-Commit Checklist (Mandatory)
+
+Run before every `git commit`. All items must pass.
+
+### Automated checks (run from `backend/`)
+
+```powershell
+npm run check-all   # runs check-hardcoded-dates.js + check-must-rules.js
+```
+
+| Check | Command | Must pass |
+|-------|---------|-----------|
+| No hardcoded `YYYY-MM-DD` date literals | `npm run check-dates` | exit 0 |
+| MUST Rule invariants (SSE broadcast chain) | `npm run check-must` | exit 0 |
+| Frontend production build | `cd frontend && npm run build` | exit 0, no errors |
+
+### Manual verification
+
+| Item | Verify |
+|------|--------|
+| No hardcoded department names/group names | `grep -r "SpecifiedKPIGrp" --include="*.js" --include="*.jsx"` — only in SQL builder functions, never as literals in business logic |
+| No hardcoded team IDs | All team IDs derived from DB via `refreshAllTeams()` |
+| Admin settings propagate instantly | `broadcastSettingsChanged()` called in `PUT /api/admin/settings`; SSE listener in `App.jsx` calls `applyGlobalConfig()` + `refreshData()` |
+| All settings are global (admin-broadcast) | `refreshMin`, `modalTaskCount`, `targets`, `loanTargets`, `atRiskPct`, `hiddenTeams`, `groupOrder` all included in `saveGlobalSettings()` payload |
+| Tooltip wording matches logic | Run `node docs/patch-tooltips.js` if xlsx was edited; verify `constants.js` TOOLTIPS keys match implemented behaviour |
+| `CLAUDE.md` reflects current state | Section 0 MUST rule, Section 6 team discovery, Section 7 date rules, Section 8 metric formulas, Section 12 settings scope |
+| No unrelated file changes | `git diff --name-only HEAD` — review every file listed |
+
+### Commit message format
+
+```
+<type>: <short summary>
+
+- <bullet: what changed and why>
+- <bullet: what changed and why>
+```
+
+Types: `feat` / `fix` / `refactor` / `docs` / `chore`
+
+---
+
+## 23. Restart Procedure
 
 ```powershell
 # 1. Kill existing Node processes
@@ -706,7 +749,7 @@ Ports: backend **5000**, frontend **5173**.
 
 ---
 
-## 23. General Coding Conventions
+## 24. General Coding Conventions
 
 - **Match provided HTML/screenshots exactly.** No redesigning or improvements unless asked.
 - **Sidebar:** `position: sticky` (not `fixed`) — `fixed` collapses the CSS Grid main column.

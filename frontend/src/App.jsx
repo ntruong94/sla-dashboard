@@ -60,8 +60,9 @@ function applyGlobalConfig(base, cfg) {
     patch.targets     = { ...DEFAULT_SETTINGS.targets,     ...cfg.targets };
   if (cfg.loanTargets && typeof cfg.loanTargets === 'object')
     patch.loanTargets = { ...DEFAULT_SETTINGS.loanTargets, ...cfg.loanTargets };
-  if (typeof cfg.atRiskPct === 'number')
-    patch.atRiskPct   = cfg.atRiskPct;
+  if (typeof cfg.atRiskPct      === 'number') patch.atRiskPct      = cfg.atRiskPct;
+  if (typeof cfg.refreshMin     === 'number') patch.refreshMin     = cfg.refreshMin;
+  if (typeof cfg.modalTaskCount === 'number') patch.modalTaskCount = cfg.modalTaskCount;
   return Object.keys(patch).length > 0 ? { ...base, ...patch } : base;
 }
 
@@ -589,11 +590,13 @@ export default function App() {
     // update instantly via SSE settings-changed event (no page reload needed).
     if (userRoleRef.current === 'admin') {
       saveGlobalSettings({
-        hiddenTeams: newSettings.hiddenTeams || [],
-        groupOrder:  newSettings.groupOrder  || [],
-        targets:     newSettings.targets     || {},
-        loanTargets: newSettings.loanTargets || DEFAULT_SETTINGS.loanTargets,
-        atRiskPct:   typeof newSettings.atRiskPct === 'number' ? newSettings.atRiskPct : DEFAULT_SETTINGS.atRiskPct,
+        hiddenTeams:    newSettings.hiddenTeams    || [],
+        groupOrder:     newSettings.groupOrder     || [],
+        targets:        newSettings.targets        || {},
+        loanTargets:    newSettings.loanTargets    || DEFAULT_SETTINGS.loanTargets,
+        atRiskPct:      typeof newSettings.atRiskPct      === 'number' ? newSettings.atRiskPct      : DEFAULT_SETTINGS.atRiskPct,
+        refreshMin:     typeof newSettings.refreshMin     === 'number' ? newSettings.refreshMin     : DEFAULT_SETTINGS.refreshMin,
+        modalTaskCount: typeof newSettings.modalTaskCount === 'number' ? newSettings.modalTaskCount : DEFAULT_SETTINGS.modalTaskCount,
       })
         .then(cfg => { globalTeamConfigRef.current = cfg; setGlobalTeamConfig(cfg); })
         .catch(err => console.warn('[global-config] save failed:', err.message));
@@ -633,7 +636,7 @@ export default function App() {
     putUserSettings({}).catch(() => {});
     // Admin: also reset global team config (including targets) so all sessions revert to defaults.
     if (userRoleRef.current === 'admin') {
-      saveGlobalSettings({ hiddenTeams: [], groupOrder: [], targets: {}, loanTargets: DEFAULT_SETTINGS.loanTargets, atRiskPct: DEFAULT_SETTINGS.atRiskPct })
+      saveGlobalSettings({ hiddenTeams: [], groupOrder: [], targets: {}, loanTargets: DEFAULT_SETTINGS.loanTargets, atRiskPct: DEFAULT_SETTINGS.atRiskPct, refreshMin: DEFAULT_SETTINGS.refreshMin, modalTaskCount: DEFAULT_SETTINGS.modalTaskCount })
         .then(cfg => { globalTeamConfigRef.current = cfg; setGlobalTeamConfig(cfg); })
         .catch(() => {});
     }

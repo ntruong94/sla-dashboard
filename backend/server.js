@@ -131,7 +131,7 @@ function nameToTeamId(name) {
 // PUT /api/admin/settings, read by all authenticated users via GET /api/settings.
 // Stored in ConfigDashboards.GlobalSettings (added by startup auto-migration).
 // version counter lets frontend polling detect changes without full diffs.
-let _globalTeamConfig = { hiddenTeams: [], groupOrder: [], targets: {}, loanTargets: { received: 10, approved: 10, settled: 10 }, atRiskPct: 87.5, version: 0 };
+let _globalTeamConfig = { hiddenTeams: [], groupOrder: [], targets: {}, loanTargets: { received: 10, approved: 10, settled: 10 }, atRiskPct: 87.5, refreshMin: 5, modalTaskCount: 50, version: 0 };
 
 async function loadGlobalTeamConfig() {
   try {
@@ -143,12 +143,14 @@ async function loadGlobalTeamConfig() {
     if (json) {
       const saved = JSON.parse(json);
       _globalTeamConfig = {
-        hiddenTeams: Array.isArray(saved.hiddenTeams) ? saved.hiddenTeams : [],
-        groupOrder:  Array.isArray(saved.groupOrder)  ? saved.groupOrder  : [],
-        targets:     (saved.targets && typeof saved.targets === 'object') ? saved.targets : {},
-        loanTargets: (saved.loanTargets && typeof saved.loanTargets === 'object') ? saved.loanTargets : { received: 10, approved: 10, settled: 10 },
-        atRiskPct:   typeof saved.atRiskPct === 'number' ? saved.atRiskPct : 87.5,
-        version:     typeof saved.version === 'number' ? saved.version    : 0,
+        hiddenTeams:    Array.isArray(saved.hiddenTeams) ? saved.hiddenTeams : [],
+        groupOrder:     Array.isArray(saved.groupOrder)  ? saved.groupOrder  : [],
+        targets:        (saved.targets && typeof saved.targets === 'object') ? saved.targets : {},
+        loanTargets:    (saved.loanTargets && typeof saved.loanTargets === 'object') ? saved.loanTargets : { received: 10, approved: 10, settled: 10 },
+        atRiskPct:      typeof saved.atRiskPct      === 'number' ? saved.atRiskPct      : 87.5,
+        refreshMin:     typeof saved.refreshMin     === 'number' ? saved.refreshMin     : 5,
+        modalTaskCount: typeof saved.modalTaskCount === 'number' ? saved.modalTaskCount : 50,
+        version:        typeof saved.version        === 'number' ? saved.version        : 0,
       };
       console.log('[global-config] loaded team config (v' + _globalTeamConfig.version + ')');
     }
@@ -1830,14 +1832,16 @@ app.get('/api/settings', requireAuth, (req, res) => {
 // connected sessions update instantly without waiting for the 15-second poll.
 app.put('/api/admin/settings', requireAdmin, express.json(), async (req, res) => {
   if (USE_MOCK) return res.json(_globalTeamConfig);
-  const { hiddenTeams, groupOrder, targets, loanTargets, atRiskPct } = req.body || {};
+  const { hiddenTeams, groupOrder, targets, loanTargets, atRiskPct, refreshMin, modalTaskCount } = req.body || {};
   _globalTeamConfig = {
-    hiddenTeams: Array.isArray(hiddenTeams) ? hiddenTeams : [],
-    groupOrder:  Array.isArray(groupOrder)  ? groupOrder  : [],
-    targets:     (targets     && typeof targets     === 'object') ? targets     : {},
-    loanTargets: (loanTargets && typeof loanTargets === 'object') ? loanTargets : { received: 10, approved: 10, settled: 10 },
-    atRiskPct:   typeof atRiskPct === 'number' ? atRiskPct : 87.5,
-    version:     (_globalTeamConfig.version || 0) + 1,
+    hiddenTeams:    Array.isArray(hiddenTeams) ? hiddenTeams : [],
+    groupOrder:     Array.isArray(groupOrder)  ? groupOrder  : [],
+    targets:        (targets     && typeof targets     === 'object') ? targets     : {},
+    loanTargets:    (loanTargets && typeof loanTargets === 'object') ? loanTargets : { received: 10, approved: 10, settled: 10 },
+    atRiskPct:      typeof atRiskPct      === 'number' ? atRiskPct      : 87.5,
+    refreshMin:     typeof refreshMin     === 'number' ? refreshMin     : 5,
+    modalTaskCount: typeof modalTaskCount === 'number' ? modalTaskCount : 50,
+    version:        (_globalTeamConfig.version || 0) + 1,
   };
   saveGlobalTeamConfigToDB().catch(() => {});
   broadcastSettingsChanged();
