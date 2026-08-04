@@ -1268,3 +1268,19 @@ See `backend/.env.example` and `frontend/.env.example` for templates.
 Use a Cloudflare Named Tunnel running as a Windows service if you want a local-hosted backend with a stable URL. See `docs/DEPLOYMENT.md` Section 8 for setup steps.
 
 Tunnel URL would become `https://api.sla.mezy.com.au`. Update `VITE_API_BASE` in Vercel and `ALLOWED_ORIGINS` in `backend/.env`.
+
+## 28. Milestone Column — All Task Tables (Added 2026-08-04)
+
+A **`Milestone`** column sourced from `REPORT_Loans_Extension.MilestoneGroupName` is present in every task table and popup/drill-through table across all tabs.
+
+- **Source:** `LEFT JOIN REPORT_Loans_Extension rle WITH (NOLOCK) ON t.ApplicationID = rle.ApplicationID` → `ISNULL(rle.MilestoneGroupName, '') AS MilestoneGroupName`
+- **Position:** immediately before the existing `Current` column
+- **Header:** `Milestone` with `whiteSpace: 'normal'` (wrapping enabled)
+- **Null handling:** renders `'-'` when empty/null (consistent with all other optional task fields)
+- **Applies to all task tables:**
+  - All Active Tasks view (`views.jsx`)
+  - TaskModal active + completed drill-through (`components.jsx`)
+  - AlertDrillTable sortable drill-through (`components.jsx`)
+  - AlertsPanel inline `drillMode='table'` (`components.jsx`)
+- **No-horizontal-scroll:** table uses `table-layout: fixed; width: 100%`; Milestone is fixed at 100px; the flexible `Description` column (25%) absorbs any layout pressure.
+- **Backend endpoints updated:** `/api/tasks` (active + completed branches), `/api/alert-tasks/:teamId` (both UNION branches)

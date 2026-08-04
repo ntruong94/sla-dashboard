@@ -140,6 +140,7 @@ function normalizeTask(t, settings = {}) {
     onHoldHours:    t.TotalHoursOnHold != null ? Math.round(parseFloat(t.TotalHoursOnHold) * 10) / 10 : null,
     onTaskHours:    t.TotalHoursOnTask != null ? Math.round(parseFloat(t.TotalHoursOnTask) * 10) / 10 : null,
     slaInHours:     t.SLAInHours != null ? Number(t.SLAInHours) : null,
+    milestoneGroupName: t.MilestoneGroupName ? (t.MilestoneGroupName === 'Approved Loans' ? 'Approved' : t.MilestoneGroupName) : null,
   };
 }
 

@@ -857,6 +857,7 @@ app.get('/api/tasks', async (req, res) => {
           RTRIM(ISNULL(cb.FirstName,'') + ISNULL(' ' + cb.Surname, '')) AS CreatedByFullName,
           ISNULL(cb.IsGroup, 0) AS CreatedByIsGroup,
           DATEDIFF(MINUTE, t.DateCreated, t.DateCompleted) / 60.0 AS RealtimeTAT,
+          ISNULL(rle.MilestoneGroupName, '') AS MilestoneGroupName,
           CASE
             WHEN (t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask > t.SLAInHours)
               OR (t.SLAAdjustedDate IS NOT NULL AND t.DateCompleted > t.SLAAdjustedDate)
@@ -864,9 +865,10 @@ app.get('/api/tasks', async (req, res) => {
             ELSE 'ok'
           END AS status
         FROM Tasks t WITH (NOLOCK)
-        LEFT JOIN ConfigTaskStatus ts WITH (NOLOCK) ON t.TaskStatusID = ts.ConfigTaskStatusID
-        LEFT JOIN Staff s             WITH (NOLOCK) ON t.AssignedTo   = s.StaffID
-        LEFT JOIN Staff cb            WITH (NOLOCK) ON t.CreatedBy    = cb.StaffID
+        LEFT JOIN ConfigTaskStatus ts        WITH (NOLOCK) ON t.TaskStatusID  = ts.ConfigTaskStatusID
+        LEFT JOIN Staff s                    WITH (NOLOCK) ON t.AssignedTo    = s.StaffID
+        LEFT JOIN Staff cb                   WITH (NOLOCK) ON t.CreatedBy     = cb.StaffID
+        LEFT JOIN REPORT_Loans_Extension rle WITH (NOLOCK) ON t.ApplicationID = rle.ApplicationID
         ${CONFIG_TASKS_JOIN}
         WHERE t.TaskStatusID = 2
           AND ${getTeamFilter()}
@@ -926,15 +928,17 @@ app.get('/api/tasks', async (req, res) => {
         ISNULL(cb.IsGroup, 0) AS CreatedByIsGroup,
         -- RealtimeTAT: TotalHoursOnTask for active tasks (NULL = excluded from TAT calculation)
         t.TotalHoursOnTask AS RealtimeTAT,
+        ISNULL(rle.MilestoneGroupName, '') AS MilestoneGroupName,
         CASE
           WHEN ((t.TotalHoursOnTask IS NOT NULL AND t.TotalHoursOnTask <> 0 AND (t.TotalHoursOnTask > t.SLAInHours OR t.TotalHoursOnTask > ${targetExpr})) OR (t.SLAAdjustedDate IS NOT NULL AND ${NOW_SQL} > t.SLAAdjustedDate)) THEN 'bad'
           WHEN t.TotalHoursOnTask > 0 AND t.TotalHoursOnTask >= ISNULL(NULLIF(t.SLAInHours, 0), 4) * ${atRiskFraction} THEN 'warn'
           ELSE 'ok'
         END AS status
       FROM Tasks t WITH (NOLOCK)
-      LEFT  JOIN ConfigTaskStatus ts WITH (NOLOCK) ON t.TaskStatusID = ts.ConfigTaskStatusID
-      LEFT  JOIN Staff s             WITH (NOLOCK) ON t.AssignedTo   = s.StaffID
-      LEFT  JOIN Staff cb            WITH (NOLOCK) ON t.CreatedBy    = cb.StaffID
+      LEFT  JOIN ConfigTaskStatus ts        WITH (NOLOCK) ON t.TaskStatusID  = ts.ConfigTaskStatusID
+      LEFT  JOIN Staff s                    WITH (NOLOCK) ON t.AssignedTo    = s.StaffID
+      LEFT  JOIN Staff cb                   WITH (NOLOCK) ON t.CreatedBy     = cb.StaffID
+      LEFT  JOIN REPORT_Loans_Extension rle WITH (NOLOCK) ON t.ApplicationID = rle.ApplicationID
       ${CONFIG_TASKS_JOIN}
       WHERE t.TaskStatusID IN (1, 4, 5, 6)  -- In Progress, On Hold, On Queue, Not Queued
         AND ${getTeamFilter()}
@@ -1207,9 +1211,10 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
       teamFilter = `((ct.SpecifiedKPIGrp IS NULL OR LTRIM(RTRIM(ct.SpecifiedKPIGrp)) = N'') AND s.DepartmentId = ${teamDef.fallbackDeptId} AND s.EmployeeStatus = 1)`;
     }
 
-    const staffJoin = `LEFT JOIN Staff s WITH (NOLOCK) ON t.AssignedTo = s.StaffID
-      LEFT JOIN ConfigTasks ct WITH (NOLOCK) ON t.ConfigTaskId = ct.ConfigTaskId
-      LEFT JOIN ConfigTaskStatus ts WITH (NOLOCK) ON t.TaskStatusID = ts.ConfigTaskStatusID`;
+    const staffJoin = `LEFT JOIN Staff s                    WITH (NOLOCK) ON t.AssignedTo    = s.StaffID
+      LEFT JOIN ConfigTasks ct              WITH (NOLOCK) ON t.ConfigTaskId  = ct.ConfigTaskId
+      LEFT JOIN ConfigTaskStatus ts         WITH (NOLOCK) ON t.TaskStatusID  = ts.ConfigTaskStatusID
+      LEFT JOIN REPORT_Loans_Extension rle  WITH (NOLOCK) ON t.ApplicationID = rle.ApplicationID`;
     // UNION returns overdue and at-risk tasks. Overdue = (TAT > SLAInHours OR TAT > slaExpr) OR GETDATE() > SLAAdjustedDate; TAT conditions require non-null non-zero TAT.
     // At-risk branch excludes tasks matching the overdue condition to prevent double counting.
     // slaExpr (team-configured target from Settings) is used for both overdue and at-risk detection.
@@ -1235,7 +1240,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
           END AS overdueHours,
           'overdue' AS taskType,
           RTRIM(ISNULL(s.FirstName,'') + ISNULL(' ' + s.Surname, '')) AS StaffFullName,
-          ISNULL(ts.TaskStatus, '') AS TaskStatus
+          ISNULL(ts.TaskStatus, '') AS TaskStatus,
+          ISNULL(rle.MilestoneGroupName, '') AS MilestoneGroupName
         FROM Tasks t WITH (NOLOCK)
         ${staffJoin}
         WHERE t.TaskStatusID IN (1, 4, 5, 6)
@@ -1262,7 +1268,8 @@ app.get('/api/alert-tasks/:teamId', async (req, res) => {
           0 AS overdueHours,
           'atrisk' AS taskType,
           RTRIM(ISNULL(s.FirstName,'') + ISNULL(' ' + s.Surname, '')) AS StaffFullName,
-          ISNULL(ts.TaskStatus, '') AS TaskStatus
+          ISNULL(ts.TaskStatus, '') AS TaskStatus,
+          ISNULL(rle.MilestoneGroupName, '') AS MilestoneGroupName
         FROM Tasks t WITH (NOLOCK)
         ${staffJoin}
         WHERE t.TaskStatusID IN (1, 4, 5, 6)

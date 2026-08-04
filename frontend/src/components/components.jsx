@@ -263,6 +263,7 @@ const AlertDrillTable = ({ rows }) => {
     if (col === 'slaHours')  return t.SLAInHours != null ? Number(t.SLAInHours) : null;
     if (col === 'onHold')    return t.TotalHoursOnHold ?? null;
     if (col === 'onTask')    return t.TotalHoursOnTask_BH ?? null;
+    if (col === 'milestone') return t.MilestoneGroupName || '';
     if (col === 'current')   return t.TaskStatus || '';
     if (col === 'status')    return t.taskType === 'overdue' ? 0 : 1;
     if (col === 'tat')       return t.TotalHoursOnTask_BH ?? t.TatHours ?? 0;
@@ -281,6 +282,7 @@ const AlertDrillTable = ({ rows }) => {
           <SortTh sortKey="slaHours"  sort={sort} onSort={cycleSort} style={{width: '65px', whiteSpace:'normal'}}>SLA (hours)</SortTh>
           <SortTh sortKey="onHold"    sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On hold (hours)</SortTh>
           <SortTh sortKey="onTask"    sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On task (hours)</SortTh>
+          <SortTh sortKey="milestone" sort={sort} onSort={cycleSort} style={{width: '100px', whiteSpace:'normal'}}>Milestone</SortTh>
           <SortTh sortKey="current"   sort={sort} onSort={cycleSort} style={{width: '100px'}}>Current</SortTh>
           <SortTh sortKey="status"    sort={sort} onSort={cycleSort} style={{width: '90px'}}>Status</SortTh>
           <SortTh sortKey="tat"       sort={sort} onSort={cycleSort} style={{width: '160px'}}>TAT vs Target</SortTh>
@@ -318,6 +320,7 @@ const AlertDrillTable = ({ rows }) => {
               <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.SLAInHours != null ? Number(t.SLAInHours) : '-'}</span></td>
               <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnHold != null ? parseFloat(t.TotalHoursOnHold).toFixed(1) : '-'}</span></td>
               <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnTask_BH != null ? parseFloat(t.TotalHoursOnTask_BH).toFixed(1) : '-'}</span></td>
+              <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.MilestoneGroupName === 'Approved Loans' ? 'Approved' : (t.MilestoneGroupName || '-')}</span></td>
               <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.TaskStatus || '-'}</span></td>
               <td style={{whiteSpace:'nowrap'}}>
                 <span className={`pill ${status.cls}`}>
@@ -465,6 +468,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                               <th style={{width:'25%'}}>Description</th>
                               <th style={{width: '70px', whiteSpace:'normal'}}>On hold (hours)</th>
                               <th style={{width: '70px', whiteSpace:'normal'}}>On task (hours)</th>
+                              <th style={{width: '100px', whiteSpace:'normal'}}>Milestone</th>
                               <th style={{width: '100px'}}>Current</th>
                               <th style={{width: '90px'}}>Status</th>
                               <th style={{width: '160px'}}>TAT vs Target</th>
@@ -501,6 +505,7 @@ const AlertsPanel = ({ alerts, onDismiss, atRiskPct = 87.5, maxTasks = 10, custo
                                   </td>
                                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnHold != null ? parseFloat(t.TotalHoursOnHold).toFixed(1) : '-'}</span></td>
                                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.TotalHoursOnTask_BH != null ? parseFloat(t.TotalHoursOnTask_BH).toFixed(1) : '-'}</span></td>
+                                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.MilestoneGroupName === 'Approved Loans' ? 'Approved' : (t.MilestoneGroupName || '-')}</span></td>
                                   <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.TaskStatus || '-'}</span></td>
                                   <td style={{whiteSpace:'nowrap'}}>
                                     <span className={`pill ${status.cls}`}>
@@ -618,6 +623,7 @@ const TaskRow = ({ task, target, showCompletedDte = false }) => {
       <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.slaInHours != null ? task.slaInHours : '-'}</span></td>
       <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.onHoldHours != null ? task.onHoldHours.toFixed(1) : '-'}</span></td>
       <td style={{whiteSpace:'nowrap'}}><span className="task-id">{task.onTaskHours != null ? task.onTaskHours.toFixed(1) : '-'}</span></td>
+      <td style={{whiteSpace:'nowrap'}}><span className="soft">{task.milestoneGroupName || '-'}</span></td>
       <td style={{whiteSpace:'nowrap'}}><span className="soft">{task.taskStatus || '-'}</span></td>
       <td style={{whiteSpace:'nowrap'}}>
         <span className={`pill ${task.status}`}>
@@ -663,6 +669,7 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10, taskLabel, loadin
     if (col === 'slaHours')     return t.slaInHours    ?? null;
     if (col === 'onHold')       return t.onHoldHours   ?? null;
     if (col === 'onTask')       return t.onTaskHours   ?? null;
+    if (col === 'milestone')    return t.milestoneGroupName || '';
     if (col === 'current')      return t.taskStatus    || '';
     if (col === 'status')       return ({bad:0,warn:1,ok:2}[t.status] ?? 3);
     if (col === 'tat')          return t.tatHours      ?? 0;
@@ -779,6 +786,7 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10, taskLabel, loadin
                   <SortTh sortKey="slaHours"     sort={sort} onSort={cycleSort} style={{width: '65px', whiteSpace:'normal'}}>SLA (hours)</SortTh>
                   <SortTh sortKey="onHold"       sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On hold (hours)</SortTh>
                   <SortTh sortKey="onTask"       sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On task (hours)</SortTh>
+                  <SortTh sortKey="milestone"    sort={sort} onSort={cycleSort} style={{width: '100px', whiteSpace:'normal'}}>Milestone</SortTh>
                   <SortTh sortKey="current"      sort={sort} onSort={cycleSort} style={{width: '100px'}}>Current</SortTh>
                   <SortTh sortKey="status"       sort={sort} onSort={cycleSort} style={{width: '90px'}}>Status</SortTh>
                   <SortTh sortKey="tat"          sort={sort} onSort={cycleSort} style={{width: '160px'}}>TAT vs Target</SortTh>
@@ -794,6 +802,7 @@ const TaskModal = ({ team, tasks = [], onClose, maxTasks = 10, taskLabel, loadin
                   <SortTh sortKey="slaHours"  sort={sort} onSort={cycleSort} style={{width: '65px', whiteSpace:'normal'}}>SLA (hours)</SortTh>
                   <SortTh sortKey="onHold"    sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On hold (hours)</SortTh>
                   <SortTh sortKey="onTask"    sort={sort} onSort={cycleSort} style={{width: '70px', whiteSpace:'normal'}}>On task (hours)</SortTh>
+                  <SortTh sortKey="milestone" sort={sort} onSort={cycleSort} style={{width: '100px', whiteSpace:'normal'}}>Milestone</SortTh>
                   <SortTh sortKey="current"   sort={sort} onSort={cycleSort} style={{width: '100px'}}>Current</SortTh>
                   <SortTh sortKey="status"    sort={sort} onSort={cycleSort} style={{width: '90px'}}>Status</SortTh>
                   <SortTh sortKey="tat"       sort={sort} onSort={cycleSort} style={{width: '160px'}}>TAT vs Target</SortTh>
@@ -918,10 +927,69 @@ const LoanKpiTile = ({ label, count, amount, countDelta, amtDelta, countDelta5, 
   );
 };
 
+// --- Modal Sparkline — 30-day daily trend inside LoanModal chips ---
+// Weekends excluded; hi=green dot, lo=red dot; hover portal tooltip.
+const SPARK_LINE  = '#808080';
+const SPARK_AREA  = '#CBCBCB';
+const ModalSparkline = ({ data = [], field, fmtFn }) => {
+  const W = 400, H = 44;
+  const wrapRef = React.useRef(null);
+  const [hoverIdx, setHoverIdx] = React.useState(null);
+
+  const pts = data.filter(d => {
+    const day = new Date(d.date + 'T00:00:00').getDay();
+    return day !== 0 && day !== 6;
+  });
+  if (pts.length < 2) return null;
+
+  const vals = pts.map(d => d[field] ?? 0);
+  const minV = Math.min(...vals);
+  const maxV = Math.max(...vals);
+  const range = maxV - minV || 1;
+  const pad = 6;
+  const xAt = i => i * (W / Math.max(pts.length - 1, 1));
+  const yAt = v => H - pad - ((v - minV) / range) * (H - pad * 2);
+
+  const path = vals.map((v, i) => `${i ? 'L' : 'M'}${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(' ');
+  const area = `${path} L${xAt(vals.length - 1)},${H} L0,${H} Z`;
+  const hiIdx = vals.indexOf(Math.max(...vals));
+  const loIdx = vals.indexOf(Math.min(...vals));
+
+  const handleMove = (e) => {
+    if (!wrapRef.current) return;
+    const rect = wrapRef.current.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    setHoverIdx(Math.min(Math.max(Math.round(ratio * (pts.length - 1)), 0), pts.length - 1));
+  };
+
+  return (
+    <div ref={wrapRef} style={{ marginTop: 8 }}
+      onMouseMove={handleMove} onMouseLeave={() => setHoverIdx(null)}>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} style={{ display: 'block' }}>
+        <path d={area} fill={SPARK_AREA} opacity="0.7"/>
+        <path d={path} fill="none" stroke={SPARK_LINE} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+        {hiIdx !== loIdx && <circle cx={xAt(loIdx)}  cy={yAt(vals[loIdx])}  r="3.5" fill="var(--bad)"/>}
+        <circle cx={xAt(hiIdx)} cy={yAt(vals[hiIdx])} r="3.5" fill="var(--ok)"/>
+        {hoverIdx !== null && <>
+          <line x1={xAt(hoverIdx)} x2={xAt(hoverIdx)} y1={0} y2={H} stroke={SPARK_LINE} strokeWidth="1" strokeDasharray="3 2" opacity="0.35"/>
+          <circle cx={xAt(hoverIdx)} cy={yAt(vals[hoverIdx])} r="3.5" fill="white" stroke={SPARK_LINE} strokeWidth="1.5"/>
+        </>}
+      </svg>
+      {hoverIdx !== null && wrapRef.current && ReactDOM.createPortal(
+        <div className="tooltip show" style={{ position: 'fixed', left: wrapRef.current.getBoundingClientRect().left + (xAt(hoverIdx) / W) * wrapRef.current.getBoundingClientRect().width, top: wrapRef.current.getBoundingClientRect().top, zIndex: 9998 }}>
+          <div className="tooltip-head">{pts[hoverIdx].date}</div>
+          <div className="tooltip-row"><span>{fmtFn ? fmtFn(vals[hoverIdx]) : vals[hoverIdx]}</span></div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+};
+
 // --- Loan Detail Modal ---
 // Drill-down modal for the 3 loan summary cards — mirrors TaskModal UX exactly.
-// Props: label (card title), type ('received'|'approved'|'settled'), loans (array), loading, error, onClose
-export const LoanModal = ({ label, loans = [], loading, error, onClose }) => {
+// Props: label (card title), type ('received'|'approved'|'settled'), loans (array), loading, error, onClose, trendData
+export const LoanModal = ({ label, loans = [], loading, error, onClose, trendData = [] }) => {
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -955,11 +1023,17 @@ export const LoanModal = ({ label, loans = [], loading, error, onClose }) => {
           <div className="modal-chips">
             <div className="chip">
               <div className="chip-label">Applications</div>
-              <div className="chip-value">{loading ? '…' : loans.length}</div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+                <div className="chip-value">{loading ? '…' : loans.length}</div>
+                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}><ModalSparkline data={trendData} field="count" fmtFn={v => v}/></div>
+              </div>
             </div>
             <div className="chip">
               <div className="chip-label">Total Loan Amount</div>
-              <div className="chip-value" style={{ fontSize: '22px' }}>{loading ? '…' : fmtAmt(total)}</div>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+                <div className="chip-value" style={{ fontSize: '22px', whiteSpace: 'nowrap' }}>{loading ? '…' : fmtAmt(total)}</div>
+                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}><ModalSparkline data={trendData} field="amount" fmtFn={fmtAmt}/></div>
+              </div>
             </div>
           </div>
         </div>

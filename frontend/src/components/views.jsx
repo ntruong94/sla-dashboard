@@ -120,6 +120,7 @@ const TasksView = ({ teams, tasks }) => {
     if (col === 'slaHours')  return t.slaInHours  ?? null;
     if (col === 'onHold')    return t.onHoldHours ?? null;
     if (col === 'onTask')    return t.onTaskHours  ?? null;
+    if (col === 'milestone') return t.milestoneGroupName || '';
     if (col === 'current')   return t.taskStatus  || '';
     if (col === 'team')      return t.teamName    || '';
     if (col === 'status')    return ({bad:0,warn:1,ok:2}[t.status] ?? 3);
@@ -200,6 +201,7 @@ const TasksView = ({ teams, tasks }) => {
               <SortTh sortKey="slaHours"  sort={sort} onSort={cycleSort} style={{width:65, whiteSpace:'normal'}}>SLA (hours)</SortTh>
               <SortTh sortKey="onHold"    sort={sort} onSort={cycleSort} style={{width:70, whiteSpace:'normal'}}>On hold (hours)</SortTh>
               <SortTh sortKey="onTask"    sort={sort} onSort={cycleSort} style={{width:70, whiteSpace:'normal'}}>On task (hours)</SortTh>
+              <SortTh sortKey="milestone" sort={sort} onSort={cycleSort} style={{width:100, whiteSpace:'normal'}}>Milestone</SortTh>
               <SortTh sortKey="current"   sort={sort} onSort={cycleSort} style={{width:110}}>Current</SortTh>
               <SortTh sortKey="team"      sort={sort} onSort={cycleSort} style={{width:120}}>Team</SortTh>
               <SortTh sortKey="status"    sort={sort} onSort={cycleSort} style={{width:90}}>Status</SortTh>
@@ -209,7 +211,7 @@ const TasksView = ({ teams, tasks }) => {
           </thead>
           <tbody>
             {filtered.length === 0 ? (
-              <tr><td colSpan="13" style={{textAlign:'center',padding:48,color:'var(--ink-muted)'}}>No tasks match the current filter.</td></tr>
+              <tr><td colSpan="14" style={{textAlign:'center',padding:48,color:'var(--ink-muted)'}}>No tasks match the current filter.</td></tr>
             ) : sorted.map(t => {
               const rowCls = t.status === 'bad' ? 'overdue-row' : t.status === 'warn' ? 'risk-row' : 'on-track-row';
               const statusLabel = t.status === 'ok' ? 'On Track' : t.status === 'warn' ? 'At Risk' : 'Overdue';
@@ -234,6 +236,7 @@ const TasksView = ({ teams, tasks }) => {
                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.slaInHours != null ? t.slaInHours : '-'}</span></td>
                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.onHoldHours != null ? t.onHoldHours.toFixed(1) : '-'}</span></td>
                   <td style={{whiteSpace:'nowrap'}}><span className="task-id">{t.onTaskHours != null ? t.onTaskHours.toFixed(1) : '-'}</span></td>
+                  <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.milestoneGroupName || '-'}</span></td>
                   <td style={{whiteSpace:'nowrap'}}><span className="soft">{t.taskStatus || '-'}</span></td>
                   <td style={{whiteSpace:'nowrap'}}>
                     <span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:12,fontWeight:500}}>
